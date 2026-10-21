@@ -181,6 +181,12 @@ class NoteIn(BaseModel):
     note: str = ""
 
 
+class StageIn(BaseModel):
+    job_id: str = ""
+    stage: str = ""         # interview / offer / rejected，空=清除
+    note: str = ""
+
+
 class ProfileIn(BaseModel):
     skills: str = ""          # 逗号分隔
     salary: int = 0
@@ -490,13 +496,14 @@ def api_jobs(keyword: str = "", city_code: str = "", status: str = "",
              scale: str = "", industry: str = "", salary_min: str = "", salary_max: str = "",
              no_salary: str = "", has_detail: str = "", starred: str = "", replied: str = "",
              dedupe: str = "", q: str = "", sort: str = "salary_desc", page: int = 1, size: int = 50,
-             overdue: str = ""):
+             overdue: str = "", stage: str = ""):
     total, rows = db.query_jobs({
         "keyword": keyword, "city_code": city_code, "status": status,
         "is_new": is_new, "applied": applied, "degree": degree, "experience": experience,
         "scale": scale, "industry": industry, "salary_min": salary_min, "salary_max": salary_max,
         "no_salary": no_salary, "has_detail": has_detail, "starred": starred, "replied": replied,
-        "dedupe": dedupe, "q": q, "sort": sort, "page": page, "size": size, "overdue": overdue})
+        "dedupe": dedupe, "q": q, "sort": sort, "page": page, "size": size, "overdue": overdue,
+        "stage": stage})
     return {"total": total, "page": page, "size": size, "rows": rows, "counts": db.counts()}
 
 
@@ -519,6 +526,33 @@ def api_note(body: NoteIn):
         return {"ok": False, "msg": "缺少 job_id"}
     db.set_note(body.job_id, body.note)
     return {"ok": True, "note": (body.note or "")[:500]}
+
+
+@app.post("/api/stage")
+def api_stage(body: StageIn):
+    """标记/流转求职阶段：面试 / Offer / 未通过（传空清除）"""
+    if not body.job_id:
+        return {"ok": False, "msg": "缺少 job_id"}
+    if not db.get_job(body.job_id):
+        return {"ok": False, "msg": "岗位不存在"}
+    stage = str(body.stage or "").strip().lower()
+    if stage and stage not in db.STAGES:
+        return {"ok": False, "msg": f"无效阶段：{stage}"}
+    n = db.set_stage(body.job_id, stage, body.note)
+    label = db.STAGE_LABELS.get(stage, "")
+    return {"ok": bool(n), "stage": stage,
+            "msg": (f"已标记「{label}」" if stage else "已清除阶段标记")}
+
+
+@app.get("/api/stages")
+def api_stages():
+    """阶段跟进视图数据：面试/Offer/未通过 三组 + 漏斗计数"""
+    data = db.get_staged()
+    ct = db.counts()
+    data["funnel"] = {
+        "active": ct["active"], "applied": ct["applied"], "replied": ct["replied"],
+        "interview": ct["interview"], "offer": ct["offer"], "rejected": ct["rejected"]}
+    return data
 
 
 # ---------- 画像（简历解析） ----------
@@ -801,17 +835,19 @@ def api_export(keyword: str = "", city_code: str = "", is_new: int = 0, status: 
                applied: str = "", degree: str = "", experience: str = "", scale: str = "",
                industry: str = "", salary_min: str = "", salary_max: str = "", no_salary: str = "",
                has_detail: str = "", starred: str = "", replied: str = "", dedupe: str = "",
-               q: str = "", sort: str = "salary_desc", overdue: str = ""):
+               q: str = "", sort: str = "salary_desc", overdue: str = "", stage: str = ""):
     rows = db.all_job_rows({"keyword": keyword, "city_code": city_code, "is_new": is_new,
                             "status": status, "applied": applied, "degree": degree,
                             "experience": experience, "scale": scale, "industry": industry,
                             "salary_min": salary_min, "salary_max": salary_max,
                             "no_salary": no_salary, "has_detail": has_detail, "starred": starred,
-                            "replied": replied, "q": q, "sort": sort, "overdue": overdue})
+                            "replied": replied, "q": q, "sort": sort, "overdue": overdue,
+                            "stage": stage})
     fields = ["job_name", "salary", "salary_min", "salary_max", "company", "scale", "industry",
               "degree", "experience", "skills", "welfare", "city_name", "area_district",
               "business_district", "lng", "lat", "match_score", "keyword", "job_url", "detail_text",
               "first_seen", "last_seen", "status", "applied", "applied_at", "note",
+              "stage", "stage_at", "stage_note",
               "boss_name", "boss_title", "brand_stage", "proxy_job", "gold_hunter"]
     buf = io.StringIO()
     w = csv.writer(buf)
