@@ -4,13 +4,14 @@
 
 **多关键词批量获取 → 本地沉淀 → 匹配打分 → 一键投递 → 回复跟踪 → 微信日报**
 
-纯本地运行的个人求职效率工具，数据只存自己的 SQLite，不上传任何地方。
+纯本地运行的个人求职效率工具，数据只存自己的 SQLite，不上传任何地方。支持 **BOSS直聘 + 猎聘** 双平台合并入库。
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
 ![SQLite](https://img.shields.io/badge/SQLite-%E6%9C%AC%E5%9C%B0%E5%AD%98%E5%82%A8-003B57?logo=sqlite&logoColor=white)
-![Tests](https://img.shields.io/badge/e2e-160%2F160-brightgreen)
+![Tests](https://img.shields.io/badge/e2e-203%2F203-brightgreen)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
+
 
 </div>
 
@@ -35,6 +36,7 @@ flowchart LR
 - 多关键词 × 多城市（内置 373 城字典，可从 BOSS 同步），离屏静默运行不打扰日常用电脑
 - 页间随机节流、分段冷却、每日请求预算；触发风控自动熔断上锁，code=37 自动降温重试
 - 重复获取只刷新不重复入库；薪资「空值不覆盖」保护，历史数据不会被抹掉
+- **双平台**：BOSS直聘 + 猎聘（猎聘走同源接口搜索，免登录可用、城市精确过滤；两平台登录态 / 浏览器实例 / 风控锁 / 请求预算完全隔离，可并行运行）
 
 **筛选与匹配**
 - 简历画像：上传 PDF / Word / TXT 或一键同步 BOSS 在线简历，本地技能词典解析
@@ -64,6 +66,7 @@ python app.py                    # 或 Windows 双击 start.bat
 2. 第一次会要求登录：右上角「登录 / 修复」，弹出窗口扫码一次，Cookie 之后自动复用
 3. 「简历画像」→ 同步 BOSS 简历或上传简历文件 → 全库自动重算匹配分
 4. （可选）把 PushPlus token 写入 `data/pushplus.txt`，开启微信日报
+5. （可选）想合并猎聘岗位：「获取配置」→ 打开「猎聘获取」开关；免登录即可搜索，点「登录猎聘」一次登录（独立登录态）可拿更全结果
 
 <details>
 <summary><b>⚠️ 免责声明</b>（点开阅读）</summary>
@@ -143,6 +146,7 @@ python e2e_test.py
 <summary><b>📌 已知限制</b></summary>
 
 - 岗位数据来自 BOSS 列表接口，单关键词单城市页数有上限（约 30 页 × 30 条）
+- 猎聘：仅做获取/入库/看板合并（投递与消息回复请到猎聘官网手动操作）；接口翻页硬上限 400 条/组合；城市需有 dqCode 映射（liepin.py CITY_CODE，已覆盖主流 12 城，缺的城市日志会提示补码）
 - 「HR 已回复」按公司名匹配会话，同名多岗可能串标，可在 HR 回复页「取消标记」
 - 地图瓦片用高德公共免 key 瓦片，仅限个人低频率使用
 - PushPlus 为第三方服务，token 需自行申请；不配置则日报功能静默关闭
