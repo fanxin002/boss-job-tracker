@@ -9,7 +9,7 @@
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
 ![SQLite](https://img.shields.io/badge/SQLite-%E6%9C%AC%E5%9C%B0%E5%AD%98%E5%82%A8-003B57?logo=sqlite&logoColor=white)
-![Tests](https://img.shields.io/badge/e2e-203%2F203-brightgreen)
+![Tests](https://img.shields.io/badge/e2e-207%2F207-brightgreen)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
 
 
@@ -36,7 +36,7 @@ flowchart LR
 - 多关键词 × 多城市（内置 373 城字典，可从 BOSS 同步），离屏静默运行不打扰日常用电脑
 - 页间随机节流、分段冷却、每日请求预算；触发风控自动熔断上锁，code=37 自动降温重试
 - 重复获取只刷新不重复入库；薪资「空值不覆盖」保护，历史数据不会被抹掉
-- **双平台**：BOSS直聘 + 猎聘（猎聘走同源接口搜索，免登录可用、城市精确过滤；两平台登录态 / 浏览器实例 / 风控锁 / 请求预算完全隔离，可并行运行）
+- **双平台统一入口**：BOSS直聘 + 猎聘，配置页「平台开关」各管各的——点一次「立即获取」/ 每日定时都会按开关顺序跑所有启用平台（BOSS 轮结束自动错峰再跑猎聘）。关键词、城市、页数、定时、浏览器模式两平台共用一份配置；登录态 / 浏览器实例 / 风控锁 / 请求预算仍完全隔离
 
 **筛选与匹配**
 - 简历画像：上传 PDF / Word / TXT 或一键同步 BOSS 在线简历，本地技能词典解析
@@ -66,7 +66,7 @@ python app.py                    # 或 Windows 双击 start.bat
 2. 第一次会要求登录：右上角「登录 / 修复」，弹出窗口扫码一次，Cookie 之后自动复用
 3. 「简历画像」→ 同步 BOSS 简历或上传简历文件 → 全库自动重算匹配分
 4. （可选）把 PushPlus token 写入 `data/pushplus.txt`，开启微信日报
-5. （可选）想合并猎聘岗位：「获取配置」→ 打开「猎聘获取」开关；免登录即可搜索，点「登录猎聘」一次登录（独立登录态）可拿更全结果
+5. （可选）想合并猎聘岗位：「获取配置」顶部「平台开关」→ 猎聘选「开启」；免登录即可搜索，点顶部「登录猎聘」一次登录（独立登录态）可拿更全结果
 
 <details>
 <summary><b>⚠️ 免责声明</b>（点开阅读）</summary>
@@ -113,7 +113,7 @@ boss-job-tracker/
 | `GET /api/counts` | 各筛选口径计数（含投递超期数） |
 | `GET /api/stats` | 看板聚合（趋势/分布/地图点位统计） |
 | `GET /api/map` | 地图点位（≤1500，含坐标/薪资/HR 字段，热力权重用） |
-| `POST /api/crawl` | 启动一轮获取（互斥、冷却锁、预算检查） |
+| `POST /api/crawl` | 统一获取入口（默认按平台开关顺序跑 BOSS→猎聘；可 `?platform=boss/liepin` 单跑） |
 | `GET /api/status` `/api/runs` | 运行状态 / 最近 10 轮历史（含日志） |
 | `POST /api/apply` `GET /api/apply_status` `/api/applications` | 投递执行与记录 |
 | `POST /api/details` `/api/details_status` | 按筛选/勾选补抓描述 |

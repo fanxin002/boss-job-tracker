@@ -4,6 +4,7 @@ import csv
 import io
 import json
 import threading
+import time
 import uuid
 from datetime import datetime
 
@@ -65,6 +66,9 @@ def do_crawl(trigger="manual"):
     with _state_lock:
         if _state["running"]:
             return None
+        cfg0 = db.get_config()
+        if str(cfg0.get("boss_enabled", "1")) != "1":
+            return None  # BOSS 平台开关已关闭
         if crawler.get_login_state().get("login_open"):
             return None  # 登录窗口进行中，避免抢占浏览器
         if crawler.repair_state().get("running"):
@@ -130,6 +134,7 @@ def _push_after(rid, error=None):
 
 # ---------- 调度 ----------
 _liepin_state = {"running": False, "run_id": None}
+_unified_state = {"running": False, "lock": threading.Lock()}  # 统一获取线程防重入
 
 
 def do_crawl_liepin(trigger="manual"):
@@ -179,21 +184,48 @@ def do_crawl_liepin(trigger="manual"):
     return rid
 
 
+def _platform_enabled(cfg, name):
+    if name == "boss":
+        return str(cfg.get("boss_enabled", "1")) == "1"
+    return str(cfg.get(f"{name}_enabled", "0")) == "1"
+
+
+def enabled_platforms(cfg=None):
+    cfg = cfg or db.get_config()
+    return [p for p in ("boss", "liepin") if _platform_enabled(cfg, p)]
+
+
+def do_crawl_all(trigger="manual", gap_sec=60):
+    """统一获取入口：按配置的平台开关，顺序跑 BOSS → 猎聘（错峰，避免两个离屏浏览器同时抢资源）。
+    返回 {ran: [...], skipped: [...], results: {platform: run_id}}"""
+    cfg = db.get_config()
+    plats = enabled_platforms(cfg)
+    ran, skipped, results = [], [], {}
+    for i, p in enumerate(plats):
+        if i > 0 and results.get(plats[i - 1]):
+            # 上一平台确实跑了 → 错峰间隔，避免两个浏览器轮无缝衔接
+            time.sleep(max(0, gap_sec))
+        if p == "boss":
+            rid = do_crawl(trigger)
+        else:
+            rid = do_crawl_liepin(trigger)
+        if rid:
+            ran.append(p)
+            results[p] = rid
+        else:
+            skipped.append(p)
+    return {"ran": ran, "skipped": skipped, "results": results}
+
+
 def _apply_schedule():
     cfg = db.get_config()
     for j in scheduler.get_jobs():
         scheduler.remove_job(j.id)
     if str(cfg.get("daily_enabled", "1")) == "1":
         hh, mm = (cfg.get("daily_time", "09:30").split(":") + ["0"])[:2]
-        scheduler.add_job(do_crawl, "cron", hour=int(hh), minute=int(mm),
+        # 统一定时任务：一个 job 内部按平台开关顺序跑（BOSS → 猎聘自动错峰）
+        scheduler.add_job(do_crawl_all, "cron", hour=int(hh), minute=int(mm),
                           args=["daily"], id="daily_crawl", misfire_grace_time=3600)
-        if str(cfg.get("liepin_enabled", "0")) == "1":
-            # 猎聘错峰 +15 分钟：两个离屏浏览器不同时开跑，降低互相拖慢与页面风控误判
-            m2 = int(mm) + 15
-            h2, m2 = int(hh) + m2 // 60, m2 % 60
-            h2 = h2 % 24
-            scheduler.add_job(do_crawl_liepin, "cron", hour=h2, minute=m2,
-                              args=["daily"], id="daily_liepin", misfire_grace_time=3600)
 
 
 @app.on_event("startup")
@@ -217,6 +249,7 @@ class ConfigIn(BaseModel):
     apply_max_batch: int = 20
     apply_interval_min: int = 12
     apply_interval_max: int = 30
+    boss_enabled: str = "1"
     liepin_enabled: str = "0"
     liepin_pages: int = 2
 
@@ -296,7 +329,10 @@ def api_set_config(body: ConfigIn):
     imax = max(imin, min(int(items.get("apply_interval_max") or 30), 300))
     items["apply_interval_min"], items["apply_interval_max"] = imin, imax
     items["detail"] = "0"  # 获取轮固定不抓描述（统一走补抓），顺带纠正历史配置
+    items["boss_enabled"] = "0" if str(items.get("boss_enabled")) == "0" else "1"
     items["liepin_enabled"] = "1" if str(items.get("liepin_enabled")) == "1" else "0"
+    if items["boss_enabled"] == "0" and items["liepin_enabled"] == "0":
+        return {"ok": False, "msg": "至少启用一个平台（BOSS 或 猎聘）"}
     items["liepin_pages"] = max(1, min(int(items.get("liepin_pages") or 2), 5))
     db.set_config(items)
     _apply_schedule()
@@ -304,8 +340,9 @@ def api_set_config(body: ConfigIn):
 
 
 @app.post("/api/crawl")
-def api_crawl(platform: str = "boss"):
-    if (platform or "boss") == "liepin":
+def api_crawl(platform: str = "all"):
+    plat = (platform or "all").strip().lower()
+    if plat == "liepin":
         if _liepin_state["running"]:
             return {"ok": False, "msg": "已有猎聘获取任务在运行"}
         risk = db.get_risk(source="liepin")
@@ -315,33 +352,81 @@ def api_crawl(platform: str = "boss"):
             return {"ok": False, "msg": "猎聘登录窗口进行中，请先完成登录"}
         cfg = db.get_config()
         if str(cfg.get("liepin_enabled", "0")) != "1":
-            return {"ok": False, "msg": "猎聘平台未启用：请先在配置里打开「猎聘获取」开关"}
+            return {"ok": False, "msg": "猎聘平台未启用：请先在配置里打开「猎聘」开关"}
         t = threading.Thread(target=do_crawl_liepin, args=["manual"], daemon=True)
         t.start()
         return {"ok": True, "msg": "已启动猎聘静默获取，完成后自动入库"}
-    if _state["running"]:
-        return {"ok": False, "msg": "已有获取任务在运行"}
-    risk = db.get_risk()
-    if risk["active"]:
-        return {"ok": False, "msg": _risk_block_msg(risk)}
-    with _apply_lock:
-        if _apply_state["running"]:
-            return {"ok": False, "msg": "投递进行中，请等待或取消"}
-        if _detail_state["running"]:
-            return {"ok": False, "msg": "描述补抓进行中，请等它跑完"}
-    if crawler.get_login_state().get("login_open") or crawler.repair_state().get("running"):
-        return {"ok": False, "msg": "登录/修复窗口进行中：请在窗口内完成验证，或点横幅上的「✕ 取消修复」"}
-    t = threading.Thread(target=do_crawl, args=["manual"], daemon=True)
-    t.start()
-    return {"ok": True, "msg": "已启动静默获取，完成后自动入库"}
+    if plat == "boss":
+        if _state["running"]:
+            return {"ok": False, "msg": "已有获取任务在运行"}
+        cfg = db.get_config()
+        if str(cfg.get("boss_enabled", "1")) != "1":
+            return {"ok": False, "msg": "BOSS 平台未启用：请先在配置里打开「BOSS」开关"}
+        risk = db.get_risk()
+        if risk["active"]:
+            return {"ok": False, "msg": _risk_block_msg(risk)}
+        with _apply_lock:
+            if _apply_state["running"] or _detail_state["running"]:
+                return {"ok": False, "msg": "投递/补抓进行中，请等待或取消"}
+        if crawler.get_login_state().get("login_open") or crawler.repair_state().get("running"):
+            return {"ok": False, "msg": "登录/修复窗口进行中：请在窗口内完成验证，或点横幅上的「✕ 取消修复」"}
+        t = threading.Thread(target=do_crawl, args=["manual"], daemon=True)
+        t.start()
+        return {"ok": True, "msg": "已启动静默获取，完成后自动入库"}
+    # ---- platform=all：统一入口，按开关顺序跑（BOSS → 猎聘，自动错峰）----
+    cfg = db.get_config()
+    plats = enabled_platforms(cfg)
+    if not plats:
+        return {"ok": False, "msg": "未启用任何平台：请在配置里至少打开 BOSS 或 猎聘"}
+    if _state["running"] or _liepin_state["running"] or _unified_state["running"]:
+        return {"ok": False, "msg": "已有获取任务在运行，请等待本轮结束"}
+    blocked = []
+    if "boss" in plats:
+        risk = db.get_risk()
+        if risk["active"]:
+            blocked.append(f"BOSS 风控冷却中（{risk['until'][11:16]} 解除）")
+        if crawler.get_login_state().get("login_open") or crawler.repair_state().get("running"):
+            blocked.append("BOSS 登录/修复窗口进行中")
+        with _apply_lock:
+            if _apply_state["running"]:
+                blocked.append("投递进行中")
+            if _detail_state["running"]:
+                blocked.append("描述补抓进行中")
+    if "liepin" in plats:
+        rl = db.get_risk(source="liepin")
+        if rl["active"]:
+            blocked.append(f"猎聘风控/登录冷却中（{rl['until'][11:16]} 解除）")
+        if liepin.get_login_state().get("login_open"):
+            blocked.append("猎聘登录窗口进行中")
+    hard = [b for b in blocked if "登录" in b or "修复" in b or "投递" in b or "补抓" in b]
+    if hard:
+        return {"ok": False, "msg": "；".join(hard) + "，请处理后再获取"}
+    if blocked and len(blocked) == len(plats):
+        return {"ok": False, "msg": "；".join(blocked) + "，本轮没有可跑的平台"}
+
+    def _run():
+        with _unified_state["lock"]:
+            if _unified_state["running"]:
+                return
+            _unified_state["running"] = True
+        try:
+            do_crawl_all("manual")
+        finally:
+            with _unified_state["lock"]:
+                _unified_state["running"] = False
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"ok": True, "msg": "已启动统一获取（" + " → ".join(plats) + "），各轮完成后自动入库"}
 
 
 @app.get("/api/status")
 def api_status():
     runs = db.get_runs(1)
     r = runs[0] if runs else {}
-    return {"running": _state["running"], "last_run": r,
-            "liepin_running": _liepin_state["running"]}
+    cfg = db.get_config()
+    return {"running": _state["running"] or _liepin_state["running"] or _unified_state["running"],
+            "boss_running": _state["running"], "liepin_running": _liepin_state["running"],
+            "platforms": enabled_platforms(cfg), "last_run": r}
 
 
 @app.get("/api/login_state")

@@ -41,6 +41,7 @@ DEFAULT_CONFIG = {
     "risk_msg": "",
     "risk_hits": "0",
     "risk_at": "",
+    "boss_enabled": "1",       # BOSS 平台获取开关（默认开；关掉后一键获取/定时只跑猎聘）
     "liepin_enabled": "0",     # 猎聘平台获取开关（默认关，登录一次后可开）
     "liepin_pages": "2",       # 猎聘每关键词×城市翻页数（DOM抓取，页数宜少）
 }
