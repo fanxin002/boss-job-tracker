@@ -1,0 +1,41 @@
+# --- 隐私/运行时数据（绝不上传） ---
+data/
+*.db
+*.log
+.browsers.txt
+.pip.log
+.pipcheck.txt
+
+# --- 开发杂项 ---
+__pycache__/
+*.pyc
+startup_hidden.vbs
+e2e_result.txt
+e2e_rerun.log
+selftest_result.txt
+bat_check.txt
+bat_verify.txt
+cleanup_log.txt
+killzombie.txt
+startup_bat.txt
+synerr.txt
+verify4.txt
+server*.log
+server*.err
+_probe*
+_ls.txt
+_chk.txt
+_s.js
+_v.txt
+_e.txt
+_restart_check.txt
+_smoke.txt
+_loc.txt
+
+# --- 系统 ---
+.DS_Store
+Thumbs.db
+
+# git 操作临时输出
+_gitstage.txt
+_noproxy-test.txt
