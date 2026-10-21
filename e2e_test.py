@@ -709,6 +709,48 @@ def main():
     check("看板-HR在线已移除", "boss_online" not in stt)
     check("看板-代招计数", stt.get("proxy", 0) >= 1)
 
+    # ---- 求职阶段管理（面试/Offer/未通过） ----
+    r = client.post("/api/stage", json={"job_id": "A", "stage": "interview", "note": "10-25 二面"})
+    check("阶段-标记面试", r.json()["ok"] and db.get_job("A")["stage"] == "interview", r.json().get("msg", ""))
+    check("阶段-带时间备注", (db.get_job("A")["stage_at"] or "") and db.get_job("A")["stage_note"] == "10-25 二面")
+    bad = client.post("/api/stage", json={"job_id": "A", "stage": "hacker"})
+    check("阶段-非法值拒绝", bad.json()["ok"] is False, bad.json().get("msg", ""))
+    check("阶段-筛选命中", client.get("/api/jobs?stage=interview").json()["total"] >= 1)
+    check("阶段-未进入阶段筛选", client.get("/api/jobs?stage=none").json()["total"] >= 1)
+    _stageIds = [x["job_id"] for x in client.get("/api/jobs?stage=interview").json()["rows"]]
+    check("阶段-筛选只含已标记", "A" in _stageIds and all(
+        db.get_job(i)["stage"] == "interview" for i in _stageIds), str(_stageIds[:5]))
+    client.post("/api/stage", json={"job_id": "A", "stage": "offer"})
+    check("阶段-流转到Offer", db.get_job("A")["stage"] == "offer")
+    cA = db.conn(); cA.execute("UPDATE jobs SET replied=1 WHERE job_id='A'"); cA.commit(); cA.close()
+    _stg_rows = client.get("/api/replies").json()["rows"]
+    _a_stg = next((x for x in _stg_rows if x.get("job_id") == "A"), None)
+    check("阶段-HR回复页带stage字段", _a_stg and _a_stg.get("stage") == "offer",
+          str(_a_stg and _a_stg.get("stage")))
+    cA = db.conn()
+    cA.execute("UPDATE jobs SET stage='rejected' WHERE job_id='B'")
+    cA.commit(); cA.close()
+    fn = client.get("/api/stages").json()["funnel"]
+    check("漏斗-/api/stages计数", fn.get("interview", 0) >= 0 and fn.get("offer", 0) >= 1
+          and fn.get("rejected", 0) >= 1, f"offer={fn.get('offer')} rej={fn.get('rejected')}")
+    cc = client.get("/api/counts").json()
+    check("漏斗-counts含三阶段", cc.get("offer") >= 1 and cc.get("rejected") >= 1,
+          f"i={cc.get('interview')} o={cc.get('offer')} r={cc.get('rejected')}")
+    check("漏斗-在招投递回复字段", all(k in fn for k in ("active", "applied", "replied")))
+    exp_st = client.get("/api/export?stage=offer").text
+    check("阶段-导出透传+含列", "stage" in exp_st.splitlines()[0] and exp_st.count("\n") >= 1,
+          exp_st.splitlines()[0][:90])
+    client.post("/api/stage", json={"job_id": "A", "stage": ""})
+    check("阶段-清除标记", db.get_job("A")["stage"] in (None, ""))
+    _sr = client.get("/api/stages").json()
+    check("阶段-get_staged按组返回", all(k in _sr for k in ("interview", "offer", "rejected"))
+          and _sr["offer"] == [], f"offer={[x['job_id'] for x in _sr['offer']]}")
+    rows_sg = client.get("/api/jobs?sort=stage_desc&size=10").json()["rows"]
+    check("阶段-按阶段排序可用", rows_sg and rows_sg[0]["job_id"] == "B",
+          str([(x['job_id'], x.get('stage')) for x in rows_sg[:3]]))
+    # 还原 B 的阶段，避免影响库
+    cB = db.conn(); cB.execute("UPDATE jobs SET stage=NULL WHERE job_id='B'"); cB.commit(); cB.close()
+
     # ---- 汇总 ----
     passed = sum(1 for s, *_ in RESULTS if s == "PASS")
     failed = [n for s, n, d in RESULTS if s == "FAIL"]
