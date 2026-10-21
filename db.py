@@ -65,6 +65,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     reply_note TEXT,                         -- 回复摘要
     reply_at TEXT,                           -- 回复同步时间
     match_score INTEGER DEFAULT 0,           -- JD 匹配分（本地规则）
+    stage TEXT,                              -- 求职阶段：interview面试/offer已录取/rejected挂了（NULL=无）
+    stage_at TEXT,                           -- 标记阶段时间
+    stage_note TEXT,                         -- 阶段备注（如"10-25 二面"）
     boss_title TEXT,                         -- HR 职位（人事经理/技术总监…）
     brand_stage TEXT,                        -- 融资阶段（未融资/A轮/已上市…）
     job_labels TEXT,                         -- 接口原样标签（1-3年,大专）
@@ -95,6 +98,10 @@ CREATE TABLE IF NOT EXISTS applications (
     created_at TEXT
 );
 """
+
+# 求职阶段：在「已回复」之后的手动流转，供漏斗看板与日报跟进用
+STAGES = ("interview", "offer", "rejected")
+STAGE_LABELS = {"interview": "面试", "offer": "Offer", "rejected": "未通过"}
 
 COLS = ["job_id", "lid", "security_id", "keyword", "city_code", "city_name", "job_name",
         "salary", "company", "scale", "industry", "degree", "experience", "skills",
@@ -148,7 +155,8 @@ def _migrate(c):
                      ("brand_stage", "TEXT"), ("job_labels", "TEXT"),
                      ("days_per_week", "TEXT"), ("least_month", "TEXT"),
                      ("proxy_job", "INTEGER DEFAULT 0"), ("gold_hunter", "INTEGER DEFAULT 0"),
-                     ("encrypt_brand_id", "TEXT"), ("boss_avatar", "TEXT")]:
+                     ("encrypt_brand_id", "TEXT"), ("boss_avatar", "TEXT"),
+                     ("stage", "TEXT"), ("stage_at", "TEXT"), ("stage_note", "TEXT")]:
         if col not in cols:
             c.execute(f"ALTER TABLE jobs ADD COLUMN {col} {typ}")
     return cols
@@ -302,6 +310,8 @@ _SORTABLE = {  # 前端sort参数 → SQL；白名单防注入
     "first_asc": "first_seen ASC",
     "company_asc": "company COLLATE NOCASE ASC, COALESCE(salary_max,-1) DESC",
     "company_desc": "company COLLATE NOCASE DESC, COALESCE(salary_max,-1) DESC",
+    "stage_desc": "CASE stage WHEN 'offer' THEN 3 WHEN 'interview' THEN 2 WHEN 'rejected' THEN 1 ELSE 0 END DESC, "
+                  "COALESCE(stage_at,'') DESC",
 }
 
 
@@ -347,6 +357,12 @@ def _build_where(filters):
         where.append("replied=1")
     elif rp == "0":
         where.append("COALESCE(replied,0)=0")
+    stg = str(filters.get("stage") or "").strip().lower()
+    if stg in STAGES:
+        where.append("stage=?")
+        params.append(stg)
+    elif stg == "none":       # 只看未进入任何阶段
+        where.append("stage IS NULL")
     od = _to_int(filters.get("overdue"))
     if od and od > 0:
         # 投递超期：已投递 + 未回复 + 在招 + 距投递(或发现)≥N天
@@ -472,6 +488,9 @@ def counts():
         "desc_done": one("SELECT COUNT(*) FROM jobs WHERE detail_text IS NOT NULL AND detail_text<>''"),
         "starred": one("SELECT COUNT(*) FROM jobs WHERE starred=1"),
         "replied": one("SELECT COUNT(*) FROM jobs WHERE replied=1"),
+        "interview": one("SELECT COUNT(*) FROM jobs WHERE stage='interview'"),
+        "offer": one("SELECT COUNT(*) FROM jobs WHERE stage='offer'"),
+        "rejected": one("SELECT COUNT(*) FROM jobs WHERE stage='rejected'"),
         "overdue": one(
             "SELECT COUNT(*) FROM jobs WHERE applied=1 AND COALESCE(replied,0)=0 AND status='active' "
             "AND julianday('now','localtime') - julianday(COALESCE(NULLIF(applied_at,''), first_seen)) >= 3"),
@@ -526,13 +545,50 @@ def set_replied(job_id, replied=1, note=""):
         return cur.rowcount
 
 
+def set_stage(job_id, stage, note=""):
+    """标记/流转求职阶段。stage ∈ interview/offer/rejected；传空=清除阶段标记。"""
+    from datetime import datetime as _dt
+    stage = str(stage or "").strip().lower()
+    if stage and stage not in STAGES:
+        return 0
+    with _lock:
+        c = conn()
+        if stage:
+            cur = c.execute(
+                "UPDATE jobs SET stage=?, stage_at=?, stage_note=? WHERE job_id=?",
+                (stage, _dt.now().strftime("%Y-%m-%d %H:%M:%S"), (note or "")[:300], job_id))
+        else:
+            cur = c.execute(
+                "UPDATE jobs SET stage=NULL, stage_at=NULL, stage_note='' WHERE job_id=?", (job_id,))
+        c.commit()
+        c.close()
+        return cur.rowcount
+
+
+def get_staged(limit=500):
+    """按阶段分组返回面试/Offer/未通过岗位（阶段跟进页 + 漏斗看板用）"""
+    c = conn()
+    rows = c.execute(
+        "SELECT job_id, job_name, company, salary, city_name, job_url, status, replied, "
+        "reply_at, stage, stage_at, stage_note, match_score, applied, applied_at, note "
+        "FROM jobs WHERE stage IS NOT NULL "
+        "ORDER BY CASE stage WHEN 'offer' THEN 0 WHEN 'interview' THEN 1 ELSE 2 END, "
+        "COALESCE(stage_at,'') DESC LIMIT ?", (limit,)).fetchall()
+    c.close()
+    out = {"interview": [], "offer": [], "rejected": []}
+    for r in rows:
+        d = dict(r)
+        out.setdefault(d["stage"], []).append(d)
+    return out
+
+
 def get_replied(limit=200):
     """已回复岗位列表（按回复时间倒序，前端「HR 回复」页用）"""
     c = conn()
     rows = c.execute(
         "SELECT job_id, job_name, company, salary, salary_min, salary_max, city_name, area_district, "
         "job_url, status, applied, applied_at, replied, reply_note, reply_at, note, starred, "
-        "match_score, first_seen FROM jobs WHERE replied=1 "
+        "match_score, first_seen, stage, stage_at, stage_note FROM jobs WHERE replied=1 "
         "ORDER BY COALESCE(reply_at,'') DESC, COALESCE(match_score,0) DESC LIMIT ?",
         (limit,)).fetchall()
     stats = c.execute(
