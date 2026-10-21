@@ -330,7 +330,6 @@
       <button class="btn btn-sm" id="btnLogin" onclick="doRepair()">登录 / 修复</button>
       <button class="btn btn-sm" id="btnCancelLogin" style="display:none" onclick="cancelRepair()">取消</button>
       <button class="btn btn-sm" id="btnLpLogin" onclick="lpLogin()" title="弹出猎聘登录窗口（独立登录态）">登录猎聘</button>
-      <button class="btn btn-sm" id="btnLpCrawl" onclick="startCrawl('liepin')" title="猎聘获取（需在配置开启猎聘开关）">获取猎聘</button>
       <button class="btn btn-sm" onclick="exportCsv()">导出 CSV</button>
       <button class="btn btn-sm" id="btnReply" onclick="syncReplies()">同步回复</button>
       <button class="btn btn-sm" id="btnDetails" onclick="startDetails()">补抓描述</button>
@@ -529,7 +528,17 @@
     <div id="view-config" style="display:none">
       <div class="card" id="cfgCard" style="max-width:860px">
         <h3>获取配置</h3>
-        <div class="sect">搜索范围</div>
+        <div class="sect">平台开关（点一次「立即获取」= 按顺序跑所有启用的平台）</div>
+        <div class="row3">
+          <div><label>BOSS直聘</label><select id="cfgBossEnabled"><option value="1">开启</option><option value="0">关闭</option></select></div>
+          <div><label>猎聘</label><select id="cfgLiepinEnabled"><option value="0">关闭</option><option value="1">开启</option></select></div>
+          <div><label>猎聘每城页数</label><select id="cfgLiepinPages"><option value="1">1 页</option><option value="2" selected>2 页</option><option value="3">3 页</option><option value="5">5 页</option></select></div>
+        </div>
+        <div class="muted" id="platSummary" style="margin-bottom:6px"></div>
+        <div id="platWarn"></div>
+        <div class="muted" style="line-height:1.6">关键词、城市、定时、浏览器模式两平台<b>共用一份配置</b>；风控与请求预算两平台各算各的。BOSS 登录用顶部「登录 / 修复」，猎聘登录用顶部「登录猎聘」（独立登录态，长期有效）。猎聘只做获取/入库/看板合并，投递请到猎聘官网手动。</div>
+
+        <div class="sect">搜索范围（两平台共用）</div>
         <label>关键词（英文逗号分隔）</label>
         <input type="text" id="cfgKeywords" placeholder="数据分析,数据分析师,BI工程师">
 
@@ -545,7 +554,7 @@
 
         <div class="row2">
           <div>
-            <label>每城获取页数 <span class="help" onclick="showPagesHelp()" title="页数多少比较安全">?</span></label>
+            <label>BOSS 每城获取页数 <span class="help" onclick="showPagesHelp()" title="页数多少比较安全">?</span></label>
             <input type="number" id="cfgPages" min="1" max="30" value="3">
             <div class="muted" id="pagesHint" style="margin-top:6px"></div>
           </div>
@@ -560,9 +569,9 @@
         <label>学历筛选 <span class="help" onclick="showDegreeHelp()" title="服务端过滤，减少无效岗位">?</span></label>
         <div class="opts" id="degOpts"></div>
 
-        <div class="sect">运行</div>
+        <div class="sect">运行（两平台共用）</div>
         <div class="row2">
-          <div><label>每日定时</label><input type="time" id="cfgDailyTime" value="09:30"></div>
+          <div><label>每日定时（到点自动跑所有启用的平台）</label><input type="time" id="cfgDailyTime" value="09:30"></div>
           <div><label>定时开关</label><select id="cfgDailyEnabled"><option value="1">开启</option><option value="0">关闭</option></select></div>
         </div>
         <div class="row2">
@@ -570,13 +579,6 @@
             <option value="2">离屏有头（推荐）</option><option value="1">无头（易被判环境异常）</option><option value="0">有头可见（调试）</option></select></div>
           <div><label>微信推送</label><select id="cfgPush"><option value="1">每轮获取后推送</option><option value="0">不推送</option></select></div>
         </div>
-
-        <div class="sect">猎聘平台（独立登录态，复用上方关键词与城市）</div>
-        <div class="row2">
-          <div><label>猎聘获取</label><select id="cfgLiepinEnabled"><option value="0">关闭</option><option value="1">开启（定时轮自动错峰+15分钟）</option></select></div>
-          <div><label>每城页数</label><select id="cfgLiepinPages"><option value="1">1 页</option><option value="2" selected>2 页</option><option value="3">3 页</option><option value="5">5 页</option></select></div>
-        </div>
-        <div class="muted" style="line-height:1.6">首次使用：点顶部「登录猎聘」完成一次登录（登录态独立保存，长期有效）。猎聘为 DOM 抓取、投递仍走猎聘官网手动——工具只做获取/入库/看板合并。</div>
 
         <div class="sect">我的画像（用于匹配分）</div>
         <div class="muted" style="margin-bottom:10px;line-height:1.6">
@@ -825,7 +827,7 @@ async function syncCities(){
 }
 
 /* ========== 配置 ========== */
-let cfgDirty=false,cfgDegrees=[];
+let cfgDirty=false,cfgDegrees=[],PLAT_STATE=['boss'],LP_PAGES=2;
 function markDirty(){cfgDirty=true;const b=document.getElementById('cfgDirty');if(b)b.style.display=''}
 function clearDirty(){cfgDirty=false;const b=document.getElementById('cfgDirty');if(b)b.style.display='none'}
 function renderDegOpts(){
@@ -844,7 +846,12 @@ async function loadConfig(){
   cfgKeywords.value=r.keywords;cfgPages.value=r.pages;
   cfgDailyTime.value=r.daily_time;cfgDailyEnabled.value=r.daily_enabled;cfgHeadless.value=r.headless||'2';
   cfgPush.value=r.push_enabled||'1';cfgGreeting.value=r.greeting||'';
+  cfgBossEnabled.value=String(r.boss_enabled==null?'1':r.boss_enabled);
   cfgLiepinEnabled.value=String(r.liepin_enabled||'0');cfgLiepinPages.value=String(r.liepin_pages||2);
+  PLAT_STATE=enabledPlatsFrom(cfgBossEnabled.value,cfgLiepinEnabled.value);
+  LP_PAGES=+cfgLiepinPages.value||2;
+  renderPlatSummary();
+  platWarnHint();
   cfgApplyMax.value=r.apply_max_batch||20;cfgApplyIMin.value=r.apply_interval_min||12;cfgApplyIMax.value=r.apply_interval_max||30;
   cfgDegrees=(r.crawl_degrees||'').split(',').filter(Boolean);
   renderDegOpts();
@@ -857,14 +864,45 @@ async function saveConfig(silent){
     pages:+cfgPages.value,daily_enabled:cfgDailyEnabled.value,
     daily_time:cfgDailyTime.value,headless:cfgHeadless.value,push_enabled:cfgPush.value,
     greeting:cfgGreeting.value,crawl_degrees:cfgDegrees.join(','),
+    boss_enabled:cfgBossEnabled.value,
     liepin_enabled:cfgLiepinEnabled.value,liepin_pages:+cfgLiepinPages.value,
     apply_max_batch:+cfgApplyMax.value,apply_interval_min:+cfgApplyIMin.value,apply_interval_max:+cfgApplyIMax.value};
   try{
     const r=await(await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
-    if(r.ok)clearDirty();
-    if(!silent)toast(r.ok?('已保存，下次定时：'+(r.next||'未启用')):'保存失败');
+    if(r.ok){clearDirty();PLAT_STATE=enabledPlatsFrom(cfgBossEnabled.value,cfgLiepinEnabled.value);LP_PAGES=+cfgLiepinPages.value||2;renderPlatSummary();platWarnHint();updateCrawlHint();}
+    if(!silent)toast(r.ok?('已保存，下次定时：'+(r.next||'未启用')):(r.msg||'保存失败'));
     updateCrawlHint();return !!r.ok;
   }catch(e){if(!silent)toast('保存失败 '+e);return false}
+}
+function enabledPlatsFrom(bossV,lpV){
+  const out=[];
+  if(String(bossV)==='1')out.push('boss');
+  if(String(lpV)==='1')out.push('liepin');
+  return out;
+}
+function renderPlatSummary(){
+  const el=document.getElementById('platSummary');
+  if(!el)return;
+  const map={boss:'BOSS直聘',liepin:'猎聘'};
+  el.innerHTML=PLAT_STATE.length
+    ?'将获取：<b>'+PLAT_STATE.map(p=>map[p]).join(' + ')+'</b>'+(PLAT_STATE.length>1?'（顺序执行，自动错峰）':'')
+    :'<span style="color:#cf1322">未启用任何平台——「立即获取」和每日定时都不会跑</span>';
+  const b=document.getElementById('btnCrawl');
+  if(b)b.style.opacity=PLAT_STATE.length?'':'0.45';
+}
+function platWarnHint(){
+  const el=document.getElementById('platWarn');
+  if(!el)return;
+  const msgs=[];
+  if(PLAT_STATE.includes('boss')){
+    const d=document.getElementById('dotLogin');
+    if(d&&!d.classList.contains('ok'))msgs.push('BOSS 未登录：先点顶部「登录 / 修复」');
+  }
+  if(PLAT_STATE.includes('liepin')){
+    const b=document.getElementById('btnLpLogin');
+    if(b&&b.textContent!=='猎聘已登录')msgs.push('猎聘未登录：建议点顶部「登录猎聘」（不登录也能跑，结果可能不全）');
+  }
+  el.innerHTML=msgs.length?'<div class="note">'+msgs.join('；')+'。</div>':'';
 }
 function crawlEstimate(){
   const kws=(cfgKeywords.value||'').split(/[,，]/).map(s=>s.trim()).filter(Boolean);
@@ -876,9 +914,11 @@ function crawlEstimate(){
 function updateCrawlHint(){
   const e=crawlEstimate();
   const capTxt=e.filtered?'条数以筛选结果为准':`上限约 ${e.cap} 条`;
-  document.getElementById('btnCrawl').title=`${e.kw} 关键词 x ${e.city} 城市 x ${e.pages} 页，${capTxt}`;
+  const platTxt=PLAT_STATE.length?PLAT_STATE.map(p=>p==='boss'?'BOSS':'猎聘').join('+'):'未启用平台';
+  document.getElementById('btnCrawl').title=`${platTxt}：${e.kw} 关键词 x ${e.city} 城市，${capTxt}`;
   const h=document.getElementById('pagesHint');
   if(h)h.textContent=e.filtered?'已启用筛选，不预估条数':`当前配置上限约 ${e.cap} 条`;
+  renderPlatSummary();platWarnHint();
 }
 async function showPagesHelp(){
   const q=await(await fetch('/api/quota')).json().catch(()=>({used:0,limit:150,left:150}));
@@ -902,45 +942,66 @@ async function showDegreeHelp(){
       <div class="note warn">选了学历后，其他学历的岗位不会入库；需要全量时先不选学历抓一轮。</div>`});
 }
 
-/* ========== 获取 ========== */
+/* ========== 获取（统一入口：按平台开关顺序跑 BOSS → 猎聘） ========== */
 function setRunState(txt,cls){
   document.getElementById('runStatus').textContent=txt;
   document.getElementById('dotRun').className='dot '+(cls||'');
 }
-async function startCrawl(platform){
-  if(platform==='liepin')return startCrawlLiepin();
+async function startCrawl(){
   const risk=await(await fetch('/api/risk')).json();
-  if(risk.active){toast('风控冷却中，约 '+risk.remaining_min+' 分钟后解除');refreshRisk();return}
-  const st=await getLoginState();
-  if(!st.logged&&!st.login_open){toast('未登录，请先点「修复登录态」');return}
+  const plats=PLAT_STATE;   // loadConfig 时刷新
+  if(!plats.length){
+    const d=await uiDialog({title:'未启用任何平台',okText:'去配置',hideCancel:true,
+      html:'<p>配置页「平台开关」里 BOSS 和 猎聘 都是关闭状态，至少打开一个才能获取。</p>'});
+    if(d.ok)switchView('config');
+    return;
+  }
+  if(plats.includes('boss')){
+    if(risk.active){toast('BOSS 风控冷却中，约 '+risk.remaining_min+' 分钟后解除');refreshRisk();return}
+    const st=await getLoginState();
+    if(!st.logged&&!st.login_open){toast('BOSS 未登录，请先点「登录 / 修复」');return}
+  }
+  const lpBlocked=plats.includes('liepin')&&risk.liepin&&risk.liepin.active;
+  if(lpBlocked&&plats.length===1){toast('猎聘冷却中，'+(risk.liepin.until||'').slice(11,16)+' 后再试');refreshRisk();return}
   const ok=await saveConfig(true);
   if(!ok){toast('配置保存失败，已取消');return}
   const e=crawlEstimate();
   const degTxt=cfgDegrees.length?cfgDegrees.map(d=>(DEG_OPTIONS.find(x=>x[0]===d)||[d,d])[1]).join(' 与 '):'不限';
   const reqs=e.kw*e.city*e.pages;
   const mins=Math.max(1,Math.round(reqs*12/60));
-  const q=await(await fetch('/api/quota')).json().catch(()=>({used:0,limit:150,left:150}));
-  const busy=reqs>=7
-    ? `<div class="note warn"><b>${e.pages} 页属于中高风险</b>：本轮约 ${mins} 分钟，会分 ${Math.ceil(reqs/6)} 段执行（页间 8 到 20 秒，每 3 页停 30 到 55 秒，每 6 页停 70 到 120 秒），中途被拦也不会丢已抓数据。建议日常改回 3 页。</div>`
-    : `<div class="note ok">节奏：页间 8 到 20 秒，本轮约 ${mins} 分钟。</div>`;
-  const dlg=await uiDialog({title:'确认获取',okText:'开始获取',
-    html:`<div class="note ok">已按当前配置保存</div>
-      <p>${e.kw} 个关键词 x ${e.city} 个城市 x 每城 ${e.pages} 页，学历 ${degTxt}${e.filtered?'，实际条数以筛选结果为准':`，本轮最多 ${e.cap} 条`}，需 ${reqs} 次请求。</p>
-      ${busy}
-      <div class="note">今日请求预算：已用 ${q.used} / ${q.limit} 次（剩 ${q.left} 次）。用完会自动停，不硬撞风控。</div>
-      <div class="note warn">抓到不等于新增：抓到是本轮接口返回的条数，老岗位会重复出现只刷新信息，新增才是第一次出现的岗位。</div>`});
+  const q=await(await fetch('/api/quota')).json().catch(()=>({used:0,limit:150,left:150,liepin:{used:0,limit:60,left:60}}));
+  const lines=[];
+  if(plats.includes('boss')){
+    const busy=reqs>=7
+      ?`<b style="color:#d46b08">${e.pages} 页属中高风险</b>，会分段执行`
+      :`页间 8-20 秒，约 ${mins} 分钟`;
+    lines.push(`<p><b>BOSS直聘</b>：${e.kw} 关键词 × ${e.city} 城市 × ${e.pages} 页，学历 ${degTxt}；${busy}。预算 ${q.used}/${q.limit}。</p>`);
+  }
+  if(plats.includes('liepin')){
+    lines.push(`<p><b style="color:#d46b08">猎聘</b>：复用同一套关键词与城市，每组合 ${LP_PAGES} 页；预算 ${(q.liepin||{}).used||0}/${(q.liepin||{}).limit||60}。${lpBlocked?'<span style="color:#cf1322">（当前冷却中，本轮会自动跳过）</span>':''}</p>`);
+  }
+  if(plats.length>1)lines.push('<div class="note">两平台顺序执行：BOSS 轮结束后间隔约 1 分钟再跑猎聘，互不抢占浏览器。</div>');
+  const dlg=await uiDialog({title:'确认获取（'+plats.map(p=>p==='boss'?'BOSS':'猎聘').join(' + ')+'）',okText:'开始获取',
+    html:lines.join('')+
+      '<div class="note warn">抓到不等于新增：抓到是接口返回条数，老岗位只刷新信息，新增才是首次出现的岗位。</div>'});
   if(!dlg.ok)return;
   const r=await(await fetch('/api/crawl',{method:'POST'})).json();
   toast(r.msg);
   if(r.ok){pollStatus();setTimeout(async()=>{
-    try{const s=await(await fetch('/api/status')).json();if(s.running&&s.last_run&&s.last_run.id)showLog(s.last_run.id)}catch(e){}
+    try{const runs=await(await fetch('/api/runs')).json();
+      const list=runs.runs||runs;const lr=list.find?list[0]:null;
+      if(lr&&lr.id)showLog(lr.id);}catch(e){}
   },1800);}else refreshRisk();
 }
 function pollStatus(){
   clearInterval(polling);
   polling=setInterval(async()=>{
     const s=await(await fetch('/api/status')).json();
-    if(s.running){setRunState('获取中','run');btnCrawl.disabled=true}
+    if(s.running){
+      const lbl=s.liepin_running&&s.boss_running?'双平台获取中'
+        :(s.liepin_running?'猎聘获取中':(s.boss_running?'BOSS 获取中':'获取中'));
+      setRunState(lbl,'run');btnCrawl.disabled=true;
+    }
     else{setRunState('空闲','ok');btnCrawl.disabled=false;clearInterval(polling);
       refreshFilters();loadJobs(1);loadRuns();refreshRisk();refreshStats();
       if(curView==='dash')loadStats();}
@@ -980,8 +1041,11 @@ async function refreshRisk(){
     const bar=document.getElementById('riskBar');
     document.getElementById('btnRepair').style.display=s.running?'none':'';
     document.getElementById('btnRepairCancel').style.display=s.running?'':'none';
-    if(r.active){bar.classList.add('show');
-      document.getElementById('riskText').textContent=`code=${r.code} ${r.msg||''}，约 ${(r.until||'').slice(11,16)} 解除，剩余 ${r.remaining_min} 分钟`;
+    const parts=[];
+    if(r.active)parts.push(`BOSS 冷却：code=${r.code} ${r.msg||''}，约 ${(r.until||'').slice(11,16)} 解除（剩 ${r.remaining_min} 分钟）`);
+    if(r.liepin&&r.liepin.active)parts.push(`猎聘 冷却：${r.liepin.msg||r.liepin.code}，约 ${(r.liepin.until||'').slice(11,16)} 解除（剩 ${r.liepin.remaining_min} 分钟）`);
+    if(parts.length){bar.classList.add('show');
+      document.getElementById('riskText').textContent='　｜　'.join(parts);
     }else if(s.running){bar.classList.add('show');document.getElementById('riskText').textContent='修复窗口中，请在浏览器完成验证';
     }else bar.classList.remove('show');
   }catch(e){}
@@ -998,8 +1062,8 @@ async function doRepair(){
 }
 async function cancelRepair(){const r=await(await fetch('/api/repair_cancel',{method:'POST'})).json();toast(r.msg)}
 
-/* ========== 猎聘（独立登录态/获取轮） ========== */
-let lpLoginTimer=null,lpPolling=null;
+/* ========== 猎聘登录态（获取已并入统一入口） ========== */
+let lpLoginTimer=null;
 async function getLpLoginState(){
   try{
     const st=await(await fetch('/api/login_state?platform=liepin')).json();
@@ -1013,40 +1077,6 @@ async function getLpLoginState(){
 async function lpLogin(){
   const r=await(await fetch('/api/login?platform=liepin',{method:'POST'})).json();
   toast(r.msg);getLpLoginState();
-}
-async function startCrawlLiepin(){
-  const cfg=await(await fetch('/api/config')).json().catch(()=>({}));
-  if(String(cfg.liepin_enabled)!=='1'){
-    const ok=await uiDialog({title:'猎聘未启用',okText:'去开启',html:'<p>配置页里有「猎聘获取」开关，打开后猎聘才会参与获取（每日定时会在 BOSS 轮之后错峰 15 分钟自动跑一轮）。</p>'});
-    if(ok.ok)switchView('config');
-    return;
-  }
-  const st=await getLpLoginState();
-  if(!st.logged&&!st.login_open){
-    toast('猎聘未登录：建议先点「登录猎聘」（不登录也能跑，但结果可能不全）');
-  }
-  const dlg=await uiDialog({title:'确认获取猎聘岗位',okText:'开始获取',
-    html:`<p>关键词 x 已配置城市 x 每组合 ${cfg.liepin_pages||2} 页（DOM 抓取，每页约 30~40 条，节奏 6-14 秒/页）。</p>
-      <div class="note">猎聘与 BOSS 登录态、浏览器实例完全隔离，可放心并行；今日猎聘翻页预算单独计数。</div>`});
-  if(!dlg.ok)return;
-  const r=await(await fetch('/api/crawl?platform=liepin',{method:'POST'})).json();
-  toast(r.msg);
-  if(r.ok){pollLpStatus();setTimeout(async()=>{
-    try{const runs=await(await fetch('/api/runs')).json();
-      const lp=(runs.runs||runs).find?((runs.runs||runs).find(x=>x.source==='liepin')):null;
-      if(lp&&lp.id)showLog(lp.id);
-    }catch(e){}
-  },1800);}
-}
-function pollLpStatus(){
-  clearInterval(lpPolling);
-  lpPolling=setInterval(async()=>{
-    const s=await(await fetch('/api/status')).json();
-    if(s.liepin_running){setRunState('猎聘获取中','run')}
-    else{setRunState('空闲','ok');clearInterval(lpPolling);
-      refreshFilters();loadJobs(1);loadRuns();refreshStats();
-      if(curView==='dash')loadStats();}
-  },3000);
 }
 
 /* ========== 回复同步 ========== */
@@ -1155,9 +1185,14 @@ async function patchProfile(){
 }
 async function clearRisk(){
   const d=await uiDialog({title:'解除风控冷却锁',okText:'确认解除',danger:true,
-    html:'<div class="note warn">若风控未真正解除，立刻获取会再次触封且冷却翻倍。建议先在浏览器确认 BOSS 能正常打开岗位列表。</div>'});
+    html:'<div class="note warn">若风控未真正解除，立刻获取会再次触封且冷却翻倍。建议先在浏览器确认对应平台能正常打开岗位列表。BOSS 与猎聘的冷却锁会分别解除（仅解除处于冷却中的平台）。</div>'});
   if(!d.ok)return;
-  const r=await(await fetch('/api/risk_clear',{method:'POST'})).json();toast(r.msg);refreshRisk();
+  const r=await(await fetch('/api/risk_clear',{method:'POST'})).json();toast(r.msg);
+  try{const chk=await(await fetch('/api/risk')).json();
+    if(chk.liepin&&chk.liepin.active){
+      const rl=await(await fetch('/api/risk_clear?platform=liepin',{method:'POST'})).json();toast(rl.msg);
+    }}catch(e){}
+  refreshRisk();
 }
 
 /* ========== 表头排序 ========== */
@@ -1806,7 +1841,10 @@ function bindMapSeg(){
   document.getElementById('mapMask').onclick=e=>{if(e.target.id==='mapMask')closeMap()};
   document.onkeydown=e=>{if(e.key==='Escape'){closeJob();closeLog();closeMap()}};
   const cc=document.getElementById('cfgCard');
-  cc.addEventListener('input',markDirty);cc.addEventListener('change',markDirty);
+  cc.addEventListener('input',markDirty);cc.addEventListener('change',e=>{markDirty();
+    if(e.target&&(e.target.id==='cfgBossEnabled'||e.target.id==='cfgLiepinEnabled'||e.target.id==='cfgLiepinPages')){
+      PLAT_STATE=enabledPlatsFrom(cfgBossEnabled.value,cfgLiepinEnabled.value);
+      LP_PAGES=+cfgLiepinPages.value||2;renderPlatSummary();platWarnHint();updateCrawlHint();}});
   const ds=await(await fetch('/api/details_status')).json();if(ds.running)pollDetails();
   const st=await(await fetch('/api/status')).json();if(st.running)pollStatus();
   const ap=await(await fetch('/api/apply_status')).json();if(ap.running){applyRunning=true;pollApply()}
