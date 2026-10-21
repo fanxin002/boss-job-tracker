@@ -213,6 +213,17 @@
     border:1px solid #e3e5e8;padding:1px 4px}
   .score.hi{border-color:#111;background:#111;color:#fff}
   .tag-replied{background:#111;border-color:#111;color:#fff;font-weight:700}
+  /* 求职阶段 tag：面试=黑底 / Offer=柠檬绿 / 未通过=划线灰 */
+  .tag-stage-itv{background:var(--ink);border-color:var(--ink);color:#fff;font-weight:700}
+  .tag-stage-offer{background:#d8f36b;border-color:#bcd94e;color:#1a2129;font-weight:700}
+  .tag-stage-rej{border-color:var(--hairline);color:var(--muted-soft);text-decoration:line-through}
+  /* 漏斗 */
+  .funnel{display:flex;align-items:stretch;gap:0;overflow-x:auto}
+  .fstep{flex:1;min-width:96px;border-left:1px solid var(--hairline);padding:4px 14px}
+  .fstep:first-child{border-left:none;padding-left:0}
+  .fstep b{display:block;font-size:24px;font-weight:700;line-height:1.2;font-variant-numeric:tabular-nums;color:var(--ink)}
+  .fstep .lb{font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin-top:4px}
+  .fstep .rate{font-size:11px;color:var(--muted-soft);margin-top:2px}
 
   .log{background:var(--surface-soft);color:var(--body);font:12px/1.85 "SF Mono",Consolas,Menlo,monospace;
     border:1px solid var(--hairline);padding:14px 16px;max-height:260px;overflow:auto;white-space:pre-wrap}
@@ -392,6 +403,8 @@
           <div class="fcell"><label>回复</label><select id="fReplied" onchange="applyFilters()"><option value="">全部</option><option value="1">HR 已回复</option><option value="0">未回复</option></select></div>
           <div class="fcell"><label>投递超期</label><select id="fOverdue" onchange="applyFilters()">
             <option value="">全部</option><option value="3">已投3天+没人理</option><option value="7">已投7天+没人理</option><option value="14">已投14天+没人理</option></select></div>
+          <div class="fcell"><label>求职阶段</label><select id="fStage" onchange="applyFilters()">
+            <option value="">全部</option><option value="interview">面试中</option><option value="offer">已拿 Offer</option><option value="rejected">未通过</option><option value="none">未进入阶段</option></select></div>
           <div class="fcell"><label>同岗合并</label><select id="fDedupe" onchange="applyFilters()"><option value="">不合并</option><option value="1">合并同公司同岗位</option></select></div>
           <div class="fcell" style="grid-column:span 1"><label>全文搜索</label><input type="text" id="fQ" placeholder="岗位 / 公司 / 技能" onkeydown="if(event.key==='Enter')applyFilters()"></div>
           <div class="fcell" style="display:flex;align-items:flex-end"><button class="btn btn-primary" style="width:100%" onclick="applyFilters()">应用筛选</button></div>
@@ -462,6 +475,11 @@
             <div class="dt" id="dkSalarySub">基于 0 条有薪资岗位</div></div>
           <div class="dk"><div class="lb">描述完成率</div><b id="dkDesc">0%</b>
             <div class="dt" id="dkDescSub">已有 0 条，待补 0 条</div></div>
+        </div>
+
+        <div class="dcard">
+          <h3>求职漏斗 <span class="right">在招 → 投递 → 回复 → 面试 → Offer（阶段为手动标记）</span></h3>
+          <div class="funnel" id="dashFunnel"></div>
         </div>
 
         <div class="dcard">
@@ -616,6 +634,22 @@
     <div style="margin-top:16px">
       <label style="margin-top:0">备注</label>
       <textarea id="jobNote" rows="2" maxlength="500" placeholder="如：等回复 / 已内推 / 薪资不符"></textarea>
+    </div>
+    <div style="margin-top:12px;display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+      <div style="flex:1;min-width:180px">
+        <label style="margin:0 0 6px">求职阶段</label>
+        <select id="jobStageSel" style="width:100%;height:32px">
+          <option value="">— 未进入阶段 —</option>
+          <option value="interview">面试中</option>
+          <option value="offer">已拿 Offer</option>
+          <option value="rejected">未通过</option>
+        </select>
+      </div>
+      <div style="flex:1;min-width:160px">
+        <label style="margin:0 0 6px">阶段备注（可选）</label>
+        <input type="text" id="jobStageNote" maxlength="200" placeholder="如：10-25 二面 / HR 加微">
+      </div>
+      <button class="btn btn-sm" onclick="saveStageFromJob()">标记阶段</button>
     </div>
     <div class="foot">
       <a class="btn btn-sm" id="jobOpen" target="_blank" style="color:var(--ink);text-decoration:none;display:inline-flex;align-items:center">在 BOSS 打开</a>
@@ -1127,9 +1161,30 @@ async function loadReplies(){
       <td class="reply-note" title="${esc(r.reply_note||'')}">${esc((r.reply_note||'').slice(0,42)||'—')}</td>
       <td>${st}</td>
       <td style="white-space:nowrap">
+        <select style="height:32px;width:104px;border:1px solid var(--hairline-strong);font-size:12px" title="标记求职阶段"
+          onchange="setStageQuick('${esc(r.job_id)}',this.value)">
+          <option value="">— 选阶段 —</option>
+          <option value="interview" ${r.stage==='interview'?'selected':''}>面试中</option>
+          <option value="offer" ${r.stage==='offer'?'selected':''}>Offer</option>
+          <option value="rejected" ${r.stage==='rejected'?'selected':''}>未通过</option>
+          ${r.stage?`<option value="clear" title="清除当前「${r.stage}」">清除阶段</option>`:''}
+        </select>
         <a class="btn btn-sm" href="https://www.zhipin.com/web/geek/chat" target="_blank" style="text-decoration:none">去聊天</a>
         <button class="btn btn-sm" onclick="setReplied('${esc(r.job_id)}',false)">取消标记</button>
       </td></tr>`}).join('');
+}
+async function setStageQuick(jid, val){
+  const stage = (val==='clear') ? '' : val;
+  try{
+    const r=await(await fetch('/api/stage',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({job_id:jid,stage,note:''})})).json();
+    toast(r.msg||'操作失败');
+    if(r.ok){
+      _funnelCache=null;
+      if(curView==='replies')loadReplies();
+      loadJobs(curPage);refreshStats();
+    }
+  }catch(e){toast('操作失败')}
 }
 function gotoRepliedInList(){
   document.getElementById('fReplied').value='1';
@@ -1141,12 +1196,13 @@ const FF=[['fKeyword','keyword','关键词'],['fCity','city_code','城市'],['fS
   ['fSalMin','salary_min','月薪下限'],['fSalMax','salary_max','月薪上限'],['fNoSal','no_salary','薪资'],
   ['fDegree','degree','学历'],['fExp','experience','经验'],['fScale','scale','规模'],
   ['fIndustry','industry','行业'],['fNew','is_new','标记'],['fStar','starred','收藏'],
-  ['fReplied','replied','回复'],['fOverdue','overdue','投递超期'],['fDedupe','dedupe','同岗'],['fQ','q','全文']];
+  ['fReplied','replied','回复'],['fOverdue','overdue','投递超期'],['fStage','stage','求职阶段'],['fDedupe','dedupe','同岗'],['fQ','q','全文']];
 const DEF_SORT='salary_desc';
 const FT={'status':{'active':'仅在招','offline':'仅已下线'},'applied':{'0':'未投递','1':'已投递','2':'投递失败'},
   'has_detail':{'1':'已有描述','0':'缺描述'},'no_salary':{'1':'有明确薪资','2':'薪资未知'},'is_new':{'1':'仅新增'},
   'starred':{'1':'仅收藏'},'replied':{'1':'HR 已回复','0':'未回复'},'dedupe':{'1':'合并同岗'},
   'overdue':{'3':'3天没人理','7':'7天没人理','14':'14天没人理'},
+  'stage':{'interview':'面试中','offer':'已拿Offer','rejected':'未通过','none':'未进入阶段'},
   'sort':{'match':'匹配度 高到低','match_asc':'匹配度 低到高','salary_desc':'薪资 高到低',
           'salary_asc':'薪资 低到高','reply_desc':'回复时间 新到旧','reply_asc':'回复时间 旧到新',
           'star_desc':'收藏优先','company_asc':'公司名 A-Z','company_desc':'公司名 Z-A',
@@ -1176,7 +1232,7 @@ function clearOne(id){
 function applyFilters(){renderChips();loadJobs(1)}
 function resetFilters(){
   ['fSalMin','fSalMax','fIndustry','fQ'].forEach(id=>document.getElementById(id).value='');
-  ['fNoSal','fDegree','fExp','fScale','fApplied','fDetail','fStar','fReplied','fOverdue','fDedupe'].forEach(id=>document.getElementById(id).value='');
+  ['fNoSal','fDegree','fExp','fScale','fApplied','fDetail','fStar','fReplied','fOverdue','fStage','fDedupe'].forEach(id=>document.getElementById(id).value='');
   document.getElementById('fKeyword').value='';document.getElementById('fCity').value='';
   document.getElementById('fStatus').value='';document.getElementById('fNew').value='0';
   document.getElementById('fSort').value=DEF_SORT;applyFilters();
@@ -1212,12 +1268,19 @@ async function loadJobs(p){
     if(j.skills)tags.push(`<span class="muted">${esc(j.skills.split(',').slice(0,2).join(' / '))}</span>`);
     let st='';
     if(j.status==='offline')st+='<span class="tag tag-off">已下线</span>';
-    if(j.replied===1)st+='<span class="tag tag-replied">HR 已回复</span>';
     if(j.is_new)st+='<span class="tag tag-new">新增</span>';
-    if(j.applied===1)st+='<span class="tag tag-applied">已投递</span>';
-    else if(j.applied===2)st+='<span class="tag tag-fail">投递失败</span>';
-    const odDays=(j.applied===1&&j.replied!==1&&j.status==='active')?_daysSince(j.applied_at||j.first_seen):0;
-    if(odDays>=3)st+=`<span class="tag tag-overdue" title="投递后 ${odDays} 天 HR 未回复，可考虑放弃">${odDays} 天未回复</span>`;
+    const STG={interview:['tag-stage-itv','面试中'],offer:['tag-stage-offer','Offer'],rejected:['tag-stage-rej','未通过']};
+    if(j.stage&&STG[j.stage]){
+      const[c,lbl]=STG[j.stage];
+      st+=`<span class="tag ${c}" title="标记于 ${(j.stage_at||'').slice(5,16)}">${lbl}</span>`;
+      if(j.stage_note)st+=`<div class="muted">${esc(j.stage_note)}</div>`;
+    }else{
+      if(j.replied===1)st+='<span class="tag tag-replied">HR 已回复</span>';
+      if(j.applied===1)st+='<span class="tag tag-applied">已投递</span>';
+      else if(j.applied===2)st+='<span class="tag tag-fail">投递失败</span>';
+      const odDays=(j.applied===1&&j.replied!==1&&j.status==='active')?_daysSince(j.applied_at||j.first_seen):0;
+      if(odDays>=3)st+=`<span class="tag tag-overdue" title="投递后 ${odDays} 天 HR 未回复，可考虑放弃">${odDays} 天未回复</span>`;
+    }
     const det=j.detail_text
       ? `<div class="desc-cell" onclick="openJob('${esc(j.job_id)}')" title="点击查看完整描述">${esc(j.detail_text.slice(0,64))}${j.detail_text.length>64?'…':''}</div>`
       : '<span class="muted">无</span>';
@@ -1301,6 +1364,8 @@ async function openJob(jid){
   const rb=document.getElementById('jobReplyBtn');
   rb.textContent=j.replied===1?'取消 HR 已回复':'标记 HR 已回复';
   rb.dataset.replied=j.replied===1?'1':'0';
+  document.getElementById('jobStageSel').value=(j.stage&&['interview','offer','rejected'].includes(j.stage))?j.stage:'';
+  document.getElementById('jobStageNote').value=j.stage_note||'';
   document.getElementById('jobMask').classList.add('show');
   document.getElementById('jobDesc').scrollTop=0;
 }
@@ -1329,6 +1394,23 @@ async function toggleStar(jid, star){
     const r=await(await fetch('/api/star',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({job_id:jid,star})})).json();
     if(r.ok){loadJobs(curPage);toast(star?'已收藏':'已取消收藏')}
+  }catch(e){toast('操作失败')}
+}
+async function saveStageFromJob(){
+  if(!curJobId)return;
+  const stage=document.getElementById('jobStageSel').value;
+  const note=document.getElementById('jobStageNote').value.trim();
+  try{
+    const r=await(await fetch('/api/stage',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({job_id:curJobId,stage,note})})).json();
+    toast(r.msg||'操作失败');
+    if(r.ok){
+      const j=JOB_CACHE[curJobId];
+      if(j){j.stage=stage||null;j.stage_note=note;j.stage_at=new Date().toISOString().slice(0,19).replace('T',' ')}
+      _funnelCache=null;
+      loadJobs(curPage);refreshStats();
+      if(curView==='dash')loadStats();
+    }
   }catch(e){toast('操作失败')}
 }
 async function saveNote(){
@@ -1475,6 +1557,19 @@ function areaChart(trend){
     <path d="${line}" fill="none" stroke="#111" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
     ${dots}${labels}</svg>`;
 }
+let _funnelCache=null;
+async function renderFunnel(){
+  let f=_funnelCache;
+  if(!f){try{const d=await(await fetch('/api/stages')).json();f=d.funnel||{};_funnelCache=f}catch(e){return}}
+  const steps=[['在招',f.active||0],['已投递',f.applied||0],['HR回复',f.replied||0],['面试',f.interview||0],['Offer',f.offer||0]];
+  const el=document.getElementById('dashFunnel');
+  if(!el)return;
+  el.innerHTML=steps.map((s,i)=>{
+    const prev=i>0?steps[i-1][1]:0;
+    const rate=(prev>0&&s[1]>0)?Math.round(s[1]/prev*100)+'%':'';
+    return `<div class="fstep"><b>${s[1]}</b><div class="lb">${s[0]}</div><div class="rate">${rate?('转化 '+rate):'&nbsp;'}</div></div>`;
+  }).join('')+(f.rejected?`<div class="fstep"><b style="color:var(--muted-soft)">${f.rejected}</b><div class="lb">未通过</div><div class="rate">&nbsp;</div></div>`:'');
+}
 async function loadStats(){
   const s=await(await fetch('/api/stats?days='+dashDays)).json();
   document.getElementById('dkTotal').textContent=s.total;
@@ -1498,6 +1593,7 @@ async function loadStats(){
   document.getElementById('dashExp').innerHTML=barRows(s.experiences);
   document.getElementById('dashCity').innerHTML=barRows(s.cities);
   document.getElementById('dashBossTitle').innerHTML=barRows(s.boss_titles||[]);
+  renderFunnel();
   document.getElementById('dkDescSub').textContent=
     `已有 ${s.desc_done} 条，待补 ${s.total-s.desc_done} 条`+
     (s.proxy?` ｜ 代招 ${s.proxy}`:'');
