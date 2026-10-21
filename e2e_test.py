@@ -751,6 +751,105 @@ def main():
     # 还原 B 的阶段，避免影响库
     cB = db.conn(); cB.execute("UPDATE jobs SET stage=NULL WHERE job_id='B'"); cB.commit(); cB.close()
 
+    # ---- 猎聘平台隔离（接口路线 normalize / source 列 / 风控 / 预算 / 下线判定） ----
+    import liepin as lpmod
+    _resp = json.dumps({"flag": 1, "data": {"data": {"jobCardList": [
+        {"job": {"jobId": "1974831551", "title": "数据分析师", "salary": "20-35K·15薪",
+                 "link": "https://www.liepin.com/job/1974831551.shtml",
+                 "requireEduLevel": "本科", "requireWorkYears": "3年以上",
+                 "dq": "厦门-思明区", "jobKind": "2", "labels": ["SQL", "Python"],
+                 "refreshTime": "20261020120000"},
+         "comp": {"compName": "公司LP", "compScale": "100-499人", "compIndustry": "互联网",
+                  "compId": 10279001, "compStage": "已上市"},
+         "recruiter": {"recruiterName": "陈女士", "recruiterTitle": "招聘经理"}},
+        {"job": {"jobId": "23847163", "title": "BI工程师", "salary": "薪资面议",
+                 "link": "https://www.liepin.com/a/23847163.shtml", "jobKind": "1"},
+         "comp": {"compName": "猎头A"}}],
+        "pagination": {"currentPage": 0, "pageSize": 40, "totalPage": 10}}}})
+    _cards, _pag = lpmod.parse_resp(_resp)
+    check("平台-parse_resp接口结构", _cards and len(_cards) == 2 and _pag.get("totalPage") == 10)
+    check("平台-parse_resp异常返回None", lpmod.parse_resp("not json")[0] is None
+          and lpmod.parse_resp('{"flag":0}')[0] is None)
+    _lprows = lpmod.normalize(_cards, "数据分析", "厦门", "090040")
+    check("平台-normalize字段", len(_lprows) == 2 and _lprows[0]["job_id"] == "lp1974831551"
+          and _lprows[0]["source"] == "liepin" and _lprows[0]["degree"] == "本科"
+          and _lprows[0]["salary"] == "20-35K·15薪" and _lprows[0]["company"] == "公司LP",
+          str(_lprows[:1]))
+    check("平台-normalize猎头标记", _lprows[1]["gold_hunter"] == 1 and _lprows[0]["gold_hunter"] == 0)
+    check("平台-normalizeHR字段", _lprows[0]["boss_name"] == "陈女士"
+          and _lprows[0]["boss_title"] == "招聘经理")
+    check("平台-城市码表", lpmod.CITY_CODE.get("厦门") == "090040"
+          and lpmod.CITY_CODE.get("泉州") == "090030")
+    _body = lpmod.build_body("数据分析", "090040", 2)
+    check("平台-请求体currentPage从0起", _body["data"]["mainSearchPcConditionForm"]["currentPage"] == 1
+          and _body["data"]["mainSearchPcConditionForm"]["dq"] == "090040")
+    nlp, lps = db.upsert_jobs(_lprows, rid2)
+    check("平台-猎聘行入库", nlp == 2 and db.get_job("lp1974831551")["source"] == "liepin")
+    check("平台-猎聘薪资解析", db.get_job("lp1974831551")["salary_min"] == 20
+          and db.get_job("lp23847163")["salary_min"] is None)
+    t_lp, _ = db.query_jobs({"source": "liepin"})
+    t_boss, rows_boss = db.query_jobs({"source": "boss"})
+    check("平台-source筛选猎聘=2", t_lp == 2, f"n={t_lp}")
+    check("平台-source筛选boss不含猎聘", t_boss >= 5 and all(
+        (r["source"] or "boss") == "boss" for r in rows_boss)
+        and all(r["job_id"] != "lp1974831551" for r in rows_boss), f"n={t_boss}")
+    check("平台-存量行默认boss", db.get_job("A")["source"] == "boss")
+    # 下线隔离：用同 (keyword, city_code) 跑 boss 下线判定，不应误伤猎聘行
+    _off_b = db.mark_offline([("数据分析", "101230200")], set(ids2) | {"lp1974831551"}, source="boss")
+    check("平台-boss下线判定不误伤猎聘", db.get_job("lp1974831551")["status"] == "active")
+    _off_l = db.mark_offline([("数据分析", "101230200")], set(), source="liepin")
+    check("平台-liepin下线判定独立", db.get_job("C")["status"] == "offline"
+          and db.get_job("lp1974831551")["status"] in ("offline", "active"))
+    # 风控隔离
+    db.set_risk("login_expired", "猎聘登录失效", source="liepin")
+    check("平台-猎聘风控激活", db.get_risk(source="liepin")["active"])
+    check("平台-猎聘风控不影响boss", not db.get_risk()["active"])
+    db.clear_risk(source="liepin")
+    check("平台-猎聘风控可单独解除", not db.get_risk(source="liepin")["active"]
+          and not db.get_risk()["active"])
+    # 预算隔离
+    _qb0, _, _ = db.bump_quota(100, source="liepin")
+    check("平台-猎聘预算独立计数", db.get_quota(100, source="liepin")["used"] >= 1
+          and db.get_quota(150)["used"] != db.get_quota(100, source="liepin")["used"])
+    # run source
+    rid3 = db.create_run("数据分析", "厦门", 2, "manual", source="liepin")
+    _r3 = next(x for x in db.get_runs(50) if x["id"] == rid3)
+    check("平台-run记录带source", _r3["source"] == "liepin")
+    # API 层
+    jlp = client.get("/api/jobs?source=liepin").json()
+    check("平台-API-jobs筛选", jlp["total"] >= 1 and all(
+        (r["source"] or "boss") == "liepin" for r in jlp["rows"]))
+    lst = client.get("/api/login_state?platform=liepin").json()
+    check("平台-API-猎聘登录态键", "logged" in lst and "login_open" in lst)
+    rk = client.get("/api/risk").json()
+    check("平台-API-risk含liepin", "liepin" in rk)
+    qt = client.get("/api/quota").json()
+    check("平台-API-quota含liepin", "liepin" in qt and qt["liepin"]["used"] >= 1)
+    cfgp = client.post("/api/config", json={
+        "keywords": "数据分析,BI", "cities": [{"name": "厦门", "code": "101230200"}],
+        "pages": 3, "liepin_enabled": "1", "liepin_pages": 2}).json()
+    check("平台-配置保存猎聘开关", cfgp["ok"])
+    cfgv = client.get("/api/config").json()
+    check("平台-猎聘配置回读", str(cfgv["liepin_enabled"]) == "1" and int(cfgv["liepin_pages"]) == 2)
+    import app as _appm
+    _sched_ids = [j.id for j in _appm.scheduler.get_jobs()]
+    check("平台-调度器注册daily_liepin", "daily_liepin" in _sched_ids, str(_sched_ids))
+    client.post("/api/config", json={
+        "keywords": "数据分析,BI", "cities": [{"name": "厦门", "code": "101230200"}],
+        "pages": 3, "liepin_enabled": "0", "liepin_pages": 2})
+    _sched_ids2 = [j.id for j in _appm.scheduler.get_jobs()]
+    check("平台-关闭后猎聘job移除", "daily_liepin" not in _sched_ids2 and "daily_crawl" in _sched_ids2,
+          str(_sched_ids2))
+    exp_lp = client.get("/api/export?source=liepin").text
+    check("平台-导出source列+透传", "source" in exp_lp.splitlines()[0]
+          and "liepin" in exp_lp, exp_lp.count("\n") - 1)
+    # 清理：删猎聘测试行，恢复猎聘风控/预算为干净态
+    _cl = db.conn(); _cl.execute("DELETE FROM jobs WHERE source='liepin'"); _cl.commit(); _cl.close()
+    db.clear_risk(source="liepin")
+    _cl = db.conn()
+    _cl.execute("UPDATE config SET value='' WHERE key IN ('quota_date_liepin','quota_used_liepin')")
+    _cl.commit(); _cl.close()
+
     # ---- 汇总 ----
     passed = sum(1 for s, *_ in RESULTS if s == "PASS")
     failed = [n for s, n, d in RESULTS if s == "FAIL"]

@@ -52,7 +52,8 @@ def push_run_summary(run_id, error=None):
     total, _rows = _db.query_jobs({})
     offline_total, _ = _db.query_jobs({"status": "offline"})
     ct = _db.counts()
-    title = f"📊 BOSS岗位日报 {r['started_at'][:10]}"
+    plat = "猎聘" if (r.get("source") or "boss") == "liepin" else "BOSS岗位"
+    title = f"📊 {plat}日报 {r['started_at'][:10]}"
     content = (
         f"- 口径：关键词「{r['keywords']}」 ｜ 城市：{r['cities']} ｜ 每城市 {r['pages']} 页\n"
         f"- 本轮抓到：**{r['fetched_count']}** 条\n"

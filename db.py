@@ -41,6 +41,8 @@ DEFAULT_CONFIG = {
     "risk_msg": "",
     "risk_hits": "0",
     "risk_at": "",
+    "liepin_enabled": "0",     # 猎聘平台获取开关（默认关，登录一次后可开）
+    "liepin_pages": "2",       # 猎聘每关键词×城市翻页数（DOM抓取，页数宜少）
 }
 
 SCHEMA = """
@@ -76,7 +78,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     proxy_job INTEGER DEFAULT 0,             -- 是否代招（代招/派遣岗，慎重投递）
     gold_hunter INTEGER DEFAULT 0,           -- 是否猎头发布
     encrypt_brand_id TEXT,                   -- 公司加密ID（同公司聚合用）
-    boss_avatar TEXT                         -- HR 头像 URL
+    boss_avatar TEXT,                        -- HR 头像 URL
+    source TEXT DEFAULT 'boss'               -- 数据来源平台：boss / liepin
 );
 CREATE TABLE IF NOT EXISTS runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -86,6 +89,7 @@ CREATE TABLE IF NOT EXISTS runs (
     fetched_count INTEGER DEFAULT 0,
     new_count INTEGER DEFAULT 0,
     offline_count INTEGER DEFAULT 0,
+    source TEXT DEFAULT 'boss',
     log TEXT DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT);
@@ -111,7 +115,7 @@ COLS = ["job_id", "lid", "security_id", "keyword", "city_code", "city_name", "jo
         "last_seen", "is_new", "status",
         "boss_title", "brand_stage", "job_labels",
         "days_per_week", "least_month", "proxy_job", "gold_hunter",
-        "encrypt_brand_id", "boss_avatar"]
+        "encrypt_brand_id", "boss_avatar", "source"]
 
 # 薪资「空值不覆盖」：游客态/风控降级时接口会返回空 salaryDesc，
 # 若直接覆盖会把之前登录态抓到的真实薪资抹掉。仅当新值非空/非NULL才更新。
@@ -156,9 +160,16 @@ def _migrate(c):
                      ("days_per_week", "TEXT"), ("least_month", "TEXT"),
                      ("proxy_job", "INTEGER DEFAULT 0"), ("gold_hunter", "INTEGER DEFAULT 0"),
                      ("encrypt_brand_id", "TEXT"), ("boss_avatar", "TEXT"),
-                     ("stage", "TEXT"), ("stage_at", "TEXT"), ("stage_note", "TEXT")]:
+                     ("stage", "TEXT"), ("stage_at", "TEXT"), ("stage_note", "TEXT"),
+                     ("source", "TEXT DEFAULT 'boss'")]:
         if col not in cols:
             c.execute(f"ALTER TABLE jobs ADD COLUMN {col} {typ}")
+    # source 是后加列：存量行补默认值（ALTER 加的列带 DEFAULT 只对新行生效）
+    c.execute("UPDATE jobs SET source='boss' WHERE source IS NULL")
+    rcols = {r["name"] for r in c.execute("PRAGMA table_info(runs)")}
+    if "source" not in rcols:
+        c.execute("ALTER TABLE runs ADD COLUMN source TEXT DEFAULT 'boss'")
+    c.execute("UPDATE runs SET source='boss' WHERE source IS NULL")
     return cols
 
 
@@ -198,12 +209,12 @@ def set_config(items: dict):
         c.close()
 
 
-def create_run(keywords, cities, pages, trigger) -> int:
+def create_run(keywords, cities, pages, trigger, source="boss") -> int:
     with _lock:
         c = conn()
         cur = c.execute(
-            "INSERT INTO runs(started_at,trigger,keywords,cities,pages) VALUES(?,?,?,?,?)",
-            (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), trigger, keywords, cities, pages))
+            "INSERT INTO runs(started_at,trigger,keywords,cities,pages,source) VALUES(?,?,?,?,?,?)",
+            (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), trigger, keywords, cities, pages, source))
         c.commit()
         rid = cur.lastrowid
         c.close()
@@ -261,6 +272,7 @@ def upsert_jobs(rows, run_id):
                 j.get("days_per_week", ""), j.get("least_month", ""),
                 1 if j.get("proxy_job") else 0, 1 if j.get("gold_hunter") else 0,
                 j.get("encrypt_brand_id", ""), j.get("boss_avatar", ""),
+                j.get("source") or "boss",
             ]
             c.execute(UPSERT_SQL, params)
         c.commit()
@@ -268,10 +280,11 @@ def upsert_jobs(rows, run_id):
     return new_cnt, seen
 
 
-def mark_offline(covered_pairs, run_job_ids):
+def mark_offline(covered_pairs, run_job_ids, source="boss"):
     """本次健康覆盖的 (keyword, city_code) 范围内：
     - 未再出现的 active 岗位 → 标记下线
-    - 范围内本轮未触及的岗位 → 清掉 is_new（新增=本轮首次出现）"""
+    - 范围内本轮未触及的岗位 → 清掉 is_new（新增=本轮首次出现）
+    source 隔离：猎聘轮的下线判定不会误伤 BOSS 的行（反之亦然）"""
     offline = 0
     ids = list(run_job_ids)
     if not ids:
@@ -282,13 +295,13 @@ def mark_offline(covered_pairs, run_job_ids):
         for kw, cc in covered_pairs:
             cur = c.execute(
                 f"UPDATE jobs SET status='offline' "
-                f"WHERE keyword=? AND city_code=? AND status='active' AND job_id NOT IN ({placeholders})",
-                [kw, cc] + ids)
+                f"WHERE keyword=? AND city_code=? AND source=? AND status='active' AND job_id NOT IN ({placeholders})",
+                [kw, cc, source] + ids)
             offline += cur.rowcount
             c.execute(
                 f"UPDATE jobs SET is_new=0 "
-                f"WHERE keyword=? AND city_code=? AND is_new=1 AND job_id NOT IN ({placeholders})",
-                [kw, cc] + ids)
+                f"WHERE keyword=? AND city_code=? AND source=? AND is_new=1 AND job_id NOT IN ({placeholders})",
+                [kw, cc, source] + ids)
         c.commit()
         c.close()
     return offline
@@ -324,6 +337,10 @@ def _to_int(v):
 
 def _build_where(filters):
     where, params = [], []
+    src = str(filters.get("source") or "").strip().lower()
+    if src in ("boss", "liepin"):
+        where.append("source=?")
+        params.append(src)
     if filters.get("keyword"):
         where.append("keyword=?")
         params.append(filters["keyword"])
@@ -779,28 +796,35 @@ def add_application(job, status, message, batch_id):
 _COOLDOWN_STEPS = [60, 120, 240, 720]
 
 
-def set_risk(code, msg=""):
+def _cfg_key(base, source):
+    """平台隔离的配置键：boss 沿用无前缀旧键（存量行为零变化），其他平台加 _{source} 后缀"""
+    return base if (source or "boss") == "boss" else f"{base}_{source}"
+
+
+def set_risk(code, msg="", source="boss"):
     """记录一次风控命中并开启冷却窗口，返回冷却信息"""
     from datetime import timedelta
     cfg = get_config()
-    hits = int(cfg.get("risk_hits") or 0) + 1
+    k = lambda b: _cfg_key(b, source)  # noqa: E731
+    hits = int(cfg.get(k("risk_hits")) or 0) + 1
     minutes = _COOLDOWN_STEPS[min(hits - 1, len(_COOLDOWN_STEPS) - 1)]
     now = datetime.now()
     until = now + timedelta(minutes=minutes)
     set_config({
-        "risk_code": str(code), "risk_msg": str(msg or "")[:200],
-        "risk_hits": str(hits),
-        "risk_at": now.strftime("%Y-%m-%d %H:%M:%S"),
-        "risk_until": until.strftime("%Y-%m-%d %H:%M:%S"),
+        k("risk_code"): str(code), k("risk_msg"): str(msg or "")[:200],
+        k("risk_hits"): str(hits),
+        k("risk_at"): now.strftime("%Y-%m-%d %H:%M:%S"),
+        k("risk_until"): until.strftime("%Y-%m-%d %H:%M:%S"),
     })
-    return get_risk()
+    return get_risk(source)
 
 
-def get_risk():
+def get_risk(source="boss"):
     cfg = get_config()
-    until_s = (cfg.get("risk_until") or "").strip()
-    info = {"active": False, "code": cfg.get("risk_code") or "", "msg": cfg.get("risk_msg") or "",
-            "hits": int(cfg.get("risk_hits") or 0), "at": cfg.get("risk_at") or "",
+    k = lambda b: _cfg_key(b, source)  # noqa: E731
+    until_s = (cfg.get(k("risk_until")) or "").strip()
+    info = {"active": False, "code": cfg.get(k("risk_code")) or "", "msg": cfg.get(k("risk_msg")) or "",
+            "hits": int(cfg.get(k("risk_hits")) or 0), "at": cfg.get(k("risk_at")) or "",
             "until": until_s, "remaining_min": 0}
     if until_s:
         try:
@@ -814,28 +838,31 @@ def get_risk():
     return info
 
 
-def clear_risk():
-    set_config({"risk_until": "", "risk_code": "", "risk_msg": "", "risk_hits": "0"})
+def clear_risk(source="boss"):
+    k = lambda b: _cfg_key(b, source)  # noqa: E731
+    set_config({k("risk_until"): "", k("risk_code"): "", k("risk_msg"): "", k("risk_hits"): "0"})
 
 
-def bump_quota(limit=150):
+def bump_quota(limit=150, source="boss"):
     """当日接口请求计数（每翻一页 +1）。返回 (used, limit, allowed)。
     跨天自动归零。预算用完不是风控，只表示今天别再请求了。"""
     today = datetime.now().strftime("%Y-%m-%d")
     cfg = get_config()
-    if (cfg.get("quota_date") or "") != today:
+    k = lambda b: _cfg_key(b, source)  # noqa: E731
+    if (cfg.get(k("quota_date")) or "") != today:
         used = 0
     else:
-        used = int(cfg.get("quota_used") or 0)
+        used = int(cfg.get(k("quota_used")) or 0)
     used += 1
-    set_config({"quota_date": today, "quota_used": str(used)})
+    set_config({k("quota_date"): today, k("quota_used"): str(used)})
     return used, limit, used <= limit
 
 
-def get_quota(limit=150):
+def get_quota(limit=150, source="boss"):
     cfg = get_config()
+    k = lambda b: _cfg_key(b, source)  # noqa: E731
     today = datetime.now().strftime("%Y-%m-%d")
-    used = int(cfg.get("quota_used") or 0) if (cfg.get("quota_date") or "") == today else 0
+    used = int(cfg.get(k("quota_used")) or 0) if (cfg.get(k("quota_date")) or "") == today else 0
     return {"date": today, "used": used, "limit": limit,
             "left": max(0, limit - used), "pct": round(used * 100.0 / limit, 1) if limit else 0}
 
