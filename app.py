@@ -16,6 +16,7 @@ from pydantic import BaseModel
 import apply
 import crawler
 import db
+import liepin
 import push
 import resume as resume_mod
 
@@ -128,6 +129,56 @@ def _push_after(rid, error=None):
 
 
 # ---------- 调度 ----------
+_liepin_state = {"running": False, "run_id": None}
+
+
+def do_crawl_liepin(trigger="manual"):
+    """猎聘获取轮：独立浏览器 slot/profile，与 BOSS 轮并行安全（但调度错峰）"""
+    with _state_lock:
+        if _liepin_state["running"]:
+            return None
+        st = liepin.get_login_state()
+        if st.get("login_open"):
+            return None  # 猎聘登录窗口进行中
+        risk = db.get_risk(source="liepin")
+        if risk["active"]:
+            if trigger == "daily":
+                try:
+                    push.send(
+                        f"⏸ 猎聘获取 {datetime.now():%Y-%m-%d} 已跳过",
+                        f"- 原因：风控/登录态异常（{risk['msg'] or risk['code']}）\n"
+                        f"- 解除时间：{risk['until']}\n"
+                        f"- 如登录失效请打开 http://127.0.0.1:8765 点「登录猎聘」")
+                except Exception:
+                    pass
+            return None
+        cfg = db.get_config()
+        if str(cfg.get("liepin_enabled", "0")) != "1":
+            return None
+        keywords, cities, _p, _d, headless, offscreen, _deg = _parse_cfg(cfg)
+        lp_pages = int(cfg.get("liepin_pages") or 2)
+        if not keywords or not cities:
+            return None
+        rid = db.create_run(",".join(keywords), ",".join(c["name"] for c in cities),
+                            lp_pages, trigger, source="liepin")
+        _liepin_state["running"] = True
+        _liepin_state["run_id"] = rid
+    try:
+        fetched, new_cnt, off_cnt = liepin.run_crawl(rid, keywords, cities, lp_pages,
+                                                     headless=headless, offscreen=offscreen)
+        db.finish_run(rid, "success" if fetched else "empty", fetched, new_cnt, off_cnt)
+        if push.has_token() and str(cfg.get("push_enabled", "1")) == "1":
+            ok, msg = push.push_run_summary(rid)
+            db.append_run_log(rid, ("📲 已推送到微信" if ok else f"推送失败：{msg}"))
+    except Exception as e:
+        db.append_run_log(rid, f"❌ 猎聘获取异常：{e}")
+        db.finish_run(rid, "error", 0, 0, 0)
+    finally:
+        with _state_lock:
+            _liepin_state["running"] = False
+    return rid
+
+
 def _apply_schedule():
     cfg = db.get_config()
     for j in scheduler.get_jobs():
@@ -136,6 +187,13 @@ def _apply_schedule():
         hh, mm = (cfg.get("daily_time", "09:30").split(":") + ["0"])[:2]
         scheduler.add_job(do_crawl, "cron", hour=int(hh), minute=int(mm),
                           args=["daily"], id="daily_crawl", misfire_grace_time=3600)
+        if str(cfg.get("liepin_enabled", "0")) == "1":
+            # 猎聘错峰 +15 分钟：两个离屏浏览器不同时开跑，降低互相拖慢与页面风控误判
+            m2 = int(mm) + 15
+            h2, m2 = int(hh) + m2 // 60, m2 % 60
+            h2 = h2 % 24
+            scheduler.add_job(do_crawl_liepin, "cron", hour=h2, minute=m2,
+                              args=["daily"], id="daily_liepin", misfire_grace_time=3600)
 
 
 @app.on_event("startup")
@@ -159,6 +217,8 @@ class ConfigIn(BaseModel):
     apply_max_batch: int = 20
     apply_interval_min: int = 12
     apply_interval_max: int = 30
+    liepin_enabled: str = "0"
+    liepin_pages: int = 2
 
 
 class ApplyIn(BaseModel):
@@ -236,13 +296,29 @@ def api_set_config(body: ConfigIn):
     imax = max(imin, min(int(items.get("apply_interval_max") or 30), 300))
     items["apply_interval_min"], items["apply_interval_max"] = imin, imax
     items["detail"] = "0"  # 获取轮固定不抓描述（统一走补抓），顺带纠正历史配置
+    items["liepin_enabled"] = "1" if str(items.get("liepin_enabled")) == "1" else "0"
+    items["liepin_pages"] = max(1, min(int(items.get("liepin_pages") or 2), 5))
     db.set_config(items)
     _apply_schedule()
     return {"ok": True, "next": _next_run_str()}
 
 
 @app.post("/api/crawl")
-def api_crawl():
+def api_crawl(platform: str = "boss"):
+    if (platform or "boss") == "liepin":
+        if _liepin_state["running"]:
+            return {"ok": False, "msg": "已有猎聘获取任务在运行"}
+        risk = db.get_risk(source="liepin")
+        if risk["active"]:
+            return {"ok": False, "msg": f"猎聘风控/登录冷却中：{risk['msg'] or risk['code']}，{risk['until'][11:16]} 后再试"}
+        if liepin.get_login_state().get("login_open"):
+            return {"ok": False, "msg": "猎聘登录窗口进行中，请先完成登录"}
+        cfg = db.get_config()
+        if str(cfg.get("liepin_enabled", "0")) != "1":
+            return {"ok": False, "msg": "猎聘平台未启用：请先在配置里打开「猎聘获取」开关"}
+        t = threading.Thread(target=do_crawl_liepin, args=["manual"], daemon=True)
+        t.start()
+        return {"ok": True, "msg": "已启动猎聘静默获取，完成后自动入库"}
     if _state["running"]:
         return {"ok": False, "msg": "已有获取任务在运行"}
     risk = db.get_risk()
@@ -264,16 +340,29 @@ def api_crawl():
 def api_status():
     runs = db.get_runs(1)
     r = runs[0] if runs else {}
-    return {"running": _state["running"], "last_run": r}
+    return {"running": _state["running"], "last_run": r,
+            "liepin_running": _liepin_state["running"]}
 
 
 @app.get("/api/login_state")
-def api_login_state():
+def api_login_state(platform: str = "boss"):
+    if (platform or "boss") == "liepin":
+        return liepin.get_login_state()
     return crawler.get_login_state()
 
 
 @app.post("/api/login")
-def api_login():
+def api_login(platform: str = "boss"):
+    if (platform or "boss") == "liepin":
+        st = liepin.get_login_state()
+        if st["login_open"]:
+            return {"ok": True, "msg": "猎聘登录窗口已打开，请在弹出窗口完成登录，成功后自动关闭"}
+        if st["logged"]:
+            return {"ok": True, "msg": "猎聘已是登录状态，无需重复登录"}
+        if _liepin_state["running"]:
+            return {"ok": False, "msg": "猎聘获取进行中，请等本轮结束再登录"}
+        threading.Thread(target=liepin.login_flow, daemon=True).start()
+        return {"ok": True, "msg": "已打开猎聘登录窗口：请手机号/扫码登录，成功后窗口自动关闭、Cookie自动保存"}
     st = crawler.get_login_state()
     if st["login_open"]:
         return {"ok": True, "msg": "登录窗口已打开，请在弹出窗口完成登录，登录后自动关闭"}
@@ -291,7 +380,12 @@ def api_login():
 
 
 @app.post("/api/cancel_login")
-def api_cancel_login():
+def api_cancel_login(platform: str = "boss"):
+    if (platform or "boss") == "liepin":
+        if liepin.get_login_state()["login_open"]:
+            liepin.cancel_login()
+            return {"ok": True, "msg": "已请求关闭猎聘登录窗口"}
+        return {"ok": False, "msg": "当前没有猎聘登录窗口"}
     if crawler.get_login_state()["login_open"]:
         crawler.cancel_login()
         return {"ok": True, "msg": "已请求关闭登录窗口"}
@@ -301,12 +395,17 @@ def api_cancel_login():
 # ---------- 风控冷却 / 修复登录态 ----------
 @app.get("/api/risk")
 def api_risk():
-    return db.get_risk()
+    out = db.get_risk()
+    out["liepin"] = db.get_risk(source="liepin")
+    return out
 
 
 @app.post("/api/risk_clear")
-def api_risk_clear():
+def api_risk_clear(platform: str = "boss"):
     """手动解除冷却锁（确认风控已过时用）"""
+    if (platform or "boss") == "liepin":
+        db.clear_risk(source="liepin")
+        return {"ok": True, "msg": "已解除猎聘冷却锁，可重新获取（若登录失效请先点「登录猎聘」）"}
     db.clear_risk()
     crawler.clear_last_risk()
     return {"ok": True, "msg": "已解除风控冷却锁，可以重新获取（建议先修复登录态）"}
@@ -314,8 +413,10 @@ def api_risk_clear():
 
 @app.get("/api/quota")
 def api_quota():
-    """今日接口请求预算（一次翻页算一次）"""
-    return db.get_quota(crawler.DAILY_QUOTA)
+    """今日接口请求预算（一次翻页算一次），两平台各算各的"""
+    out = db.get_quota(crawler.DAILY_QUOTA)
+    out["liepin"] = db.get_quota(liepin.DAILY_QUOTA, source="liepin")
+    return out
 
 
 @app.post("/api/repair")
@@ -496,14 +597,14 @@ def api_jobs(keyword: str = "", city_code: str = "", status: str = "",
              scale: str = "", industry: str = "", salary_min: str = "", salary_max: str = "",
              no_salary: str = "", has_detail: str = "", starred: str = "", replied: str = "",
              dedupe: str = "", q: str = "", sort: str = "salary_desc", page: int = 1, size: int = 50,
-             overdue: str = "", stage: str = ""):
+             overdue: str = "", stage: str = "", source: str = ""):
     total, rows = db.query_jobs({
         "keyword": keyword, "city_code": city_code, "status": status,
         "is_new": is_new, "applied": applied, "degree": degree, "experience": experience,
         "scale": scale, "industry": industry, "salary_min": salary_min, "salary_max": salary_max,
         "no_salary": no_salary, "has_detail": has_detail, "starred": starred, "replied": replied,
         "dedupe": dedupe, "q": q, "sort": sort, "page": page, "size": size, "overdue": overdue,
-        "stage": stage})
+        "stage": stage, "source": source})
     return {"total": total, "page": page, "size": size, "rows": rows, "counts": db.counts()}
 
 
@@ -835,17 +936,19 @@ def api_export(keyword: str = "", city_code: str = "", is_new: int = 0, status: 
                applied: str = "", degree: str = "", experience: str = "", scale: str = "",
                industry: str = "", salary_min: str = "", salary_max: str = "", no_salary: str = "",
                has_detail: str = "", starred: str = "", replied: str = "", dedupe: str = "",
-               q: str = "", sort: str = "salary_desc", overdue: str = "", stage: str = ""):
+               q: str = "", sort: str = "salary_desc", overdue: str = "", stage: str = "",
+               source: str = ""):
     rows = db.all_job_rows({"keyword": keyword, "city_code": city_code, "is_new": is_new,
                             "status": status, "applied": applied, "degree": degree,
                             "experience": experience, "scale": scale, "industry": industry,
                             "salary_min": salary_min, "salary_max": salary_max,
                             "no_salary": no_salary, "has_detail": has_detail, "starred": starred,
                             "replied": replied, "q": q, "sort": sort, "overdue": overdue,
-                            "stage": stage})
+                            "stage": stage, "source": source})
     fields = ["job_name", "salary", "salary_min", "salary_max", "company", "scale", "industry",
               "degree", "experience", "skills", "welfare", "city_name", "area_district",
               "business_district", "lng", "lat", "match_score", "keyword", "job_url", "detail_text",
+              "source",
               "first_seen", "last_seen", "status", "applied", "applied_at", "note",
               "stage", "stage_at", "stage_note",
               "boss_name", "boss_title", "brand_stage", "proxy_job", "gold_hunter"]
