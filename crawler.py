@@ -48,13 +48,15 @@ def _get_free_port():
     return port
 
 
-def cleanup_stale_browsers():
-    """杀掉所有使用本项目 profile 的残留 Chrome 进程（精确匹配命令行，不碰日常浏览器）"""
+def cleanup_stale_browsers(match=None):
+    """杀掉使用本项目 profile 的残留 Chrome 进程（精确匹配命令行，不碰日常浏览器）。
+    match 给定时只杀命令行含该串的进程（平台隔离：清 boss 不误杀猎聘，反之亦然）"""
     try:
         import subprocess
+        frag = match or "boss-job-tracker"
         q = ("Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
-             "Where-Object { $_.CommandLine -like '*boss-job-tracker*' } | "
-             "ForEach-Object { $_.ProcessId }")
+             "Where-Object { $_.CommandLine -like '*%s*' } | "
+             "ForEach-Object { $_.ProcessId }") % frag
         out = subprocess.run(["powershell", "-NoProfile", "-Command", q],
                              capture_output=True, text=True, timeout=30).stdout
         for pid in out.split():
@@ -67,7 +69,8 @@ def cleanup_stale_browsers():
         pass
 
 
-_browser = {"page": None, "headless": None}
+_browser = {"page": None, "headless": None}   # boss slot 的浏览器（历史代码沿用此引用）
+_browsers = {"boss": _browser}                  # 按 slot 隔离：liepin 等其它平台各自独立实例
 
 # 指纹加固：抹掉自动化痕迹，补齐真人浏览器该有的属性
 # 只做「还原成普通浏览器」的伪装，不伪造敏感字段；每个新 document 生效
@@ -111,8 +114,9 @@ def _page_alive(page):
         return False
 
 
-def ensure_browser(headless=False, offscreen=False):
-    """进程内单例：复用同一浏览器；模式变化则重建。
+def ensure_browser(headless=False, offscreen=False, profile=None, slot="boss"):
+    """进程内按 slot 单例：复用同一浏览器；模式变化则重建。
+    slot 隔离：boss 与猎聘各自独立 profile / 独立浏览器实例，互不抢占。
     三种模式：
       headless=True          真无头（最快，但 HeadlessChrome 指纹易被识别 → code=37）
       offscreen=True         离屏有头：真实浏览器窗口挪到屏幕外，用户看不见，指纹是真 Chrome（推荐）
@@ -120,26 +124,28 @@ def ensure_browser(headless=False, offscreen=False):
     注意：无头必须用 DrissionPage 官方 co.headless()，raw 参数 --headless=new 会导致 CDP 连接 404"""
     from DrissionPage import ChromiumPage, ChromiumOptions
     mode = "headless" if headless else ("offscreen" if offscreen else "headed")
-    page = _browser["page"]
+    profile = profile or PROFILE_DIR
+    browser = _browsers.setdefault(slot, {"page": None, "headless": None})
+    page = browser["page"]
     if page is not None and _page_alive(page):
-        if _browser["headless"] == mode:
+        if browser["headless"] == mode:
             return page
         try:
             page.quit()
         except Exception:
             pass
-        _browser["page"] = None
+        browser["page"] = None
     exe = next((p for p in CHROME_CANDIDATES if os.path.exists(p)), None)
-    os.makedirs(PROFILE_DIR, exist_ok=True)
+    os.makedirs(profile, exist_ok=True)
     last_err = None
     for attempt in range(2):
         if attempt:
-            cleanup_stale_browsers()
+            cleanup_stale_browsers(match=os.path.join(profile, ""))
         co = ChromiumOptions()
         if exe:
             co.set_browser_path(exe)
         co.set_local_port(_get_free_port())
-        co.set_argument(f"--user-data-dir={PROFILE_DIR}")
+        co.set_argument(f"--user-data-dir={profile}")
         co.set_argument("--disable-blink-features=AutomationControlled")
         co.set_argument("--no-first-run")
         co.set_argument("--no-default-browser-check")
@@ -164,7 +170,7 @@ def ensure_browser(headless=False, offscreen=False):
                 page.run_cdp("Page.addScriptToEvaluateOnNewDocument", source=_STEALTH_JS)
             except Exception:
                 pass
-            _browser["page"], _browser["headless"] = page, mode
+            browser["page"], browser["headless"] = page, mode
             return page
         except Exception as e:
             last_err = e
@@ -268,16 +274,17 @@ def inject_cookies(page):
         return False
 
 
-def _close_browser():
-    p = _browser["page"]
-    _browser["page"] = _browser["headless"] = None
+def _close_browser(slot="boss"):
+    browser = _browsers.get(slot, _browser)
+    p = browser["page"]
+    browser["page"] = browser["headless"] = None
     if p:
         try:
             p.quit()
             return
         except Exception:
             pass
-    cleanup_stale_browsers()
+    cleanup_stale_browsers(match=os.path.join(PROFILE_DIR, ""))
 
 
 def login_flow():
