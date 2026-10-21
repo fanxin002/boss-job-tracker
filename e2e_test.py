@@ -832,14 +832,36 @@ def main():
     cfgv = client.get("/api/config").json()
     check("平台-猎聘配置回读", str(cfgv["liepin_enabled"]) == "1" and int(cfgv["liepin_pages"]) == 2)
     import app as _appm
+    # 统一定时入口：一个 daily_crawl job，内部按平台开关顺序跑
     _sched_ids = [j.id for j in _appm.scheduler.get_jobs()]
-    check("平台-调度器注册daily_liepin", "daily_liepin" in _sched_ids, str(_sched_ids))
+    check("平台-统一定时任务注册", "daily_crawl" in _sched_ids and "daily_liepin" not in _sched_ids,
+          str(_sched_ids))
+    _plats = _appm.enabled_platforms(cfgv)
+    check("平台-enabled_platforms含猎聘", "liepin" in _plats and "boss" in _plats, str(_plats))
+    # 双平台关闭 → 配置被拒
+    _both_off = client.post("/api/config", json={
+        "keywords": "数据分析", "cities": [{"name": "厦门", "code": "101230200"}],
+        "pages": 3, "boss_enabled": "0", "liepin_enabled": "0"}).json()
+    check("平台-双关保存被拒", _both_off["ok"] is False, _both_off.get("msg", ""))
+    # 仅猎聘：boss 关闭后 enabled_platforms 只剩 liepin
     client.post("/api/config", json={
         "keywords": "数据分析,BI", "cities": [{"name": "厦门", "code": "101230200"}],
-        "pages": 3, "liepin_enabled": "0", "liepin_pages": 2})
-    _sched_ids2 = [j.id for j in _appm.scheduler.get_jobs()]
-    check("平台-关闭后猎聘job移除", "daily_liepin" not in _sched_ids2 and "daily_crawl" in _sched_ids2,
-          str(_sched_ids2))
+        "pages": 3, "boss_enabled": "0", "liepin_enabled": "1", "liepin_pages": 2})
+    _only_lp = _appm.enabled_platforms(client.get("/api/config").json())
+    check("平台-仅猎聘开关生效", _only_lp == ["liepin"], str(_only_lp))
+    client.post("/api/config", json={
+        "keywords": "数据分析,BI", "cities": [{"name": "厦门", "code": "101230200"}],
+        "pages": 3, "boss_enabled": "1", "liepin_enabled": "0", "liepin_pages": 2})
+    _only_b = _appm.enabled_platforms(client.get("/api/config").json())
+    check("平台-猎聘关闭后只剩boss", _only_b == ["boss"], str(_only_b))
+    # BOSS 开关关闭时 do_crawl 直接拒跑
+    client.post("/api/config", json={
+        "keywords": "数据分析,BI", "cities": [{"name": "厦门", "code": "101230200"}],
+        "pages": 3, "boss_enabled": "0", "liepin_enabled": "1", "liepin_pages": 2})
+    check("平台-BOSS关闭后do_crawl拒跑", _appm.do_crawl("manual") is None)
+    client.post("/api/config", json={
+        "keywords": "数据分析,BI", "cities": [{"name": "厦门", "code": "101230200"}],
+        "pages": 3, "boss_enabled": "1", "liepin_enabled": "0", "liepin_pages": 2})
     exp_lp = client.get("/api/export?source=liepin").text
     check("平台-导出source列+透传", "source" in exp_lp.splitlines()[0]
           and "liepin" in exp_lp, exp_lp.count("\n") - 1)
