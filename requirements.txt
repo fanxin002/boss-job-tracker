@@ -1,0 +1,12 @@
+# 运行环境：Python 3.10+（开发与测试于 3.13）
+fastapi==0.151.0
+uvicorn==0.54.0
+pydantic==2.14.1
+apscheduler==3.11.3
+DrissionPage==4.1.1.4
+requests==2.34.2
+
+# 简历上传解析（resume.py 按需 import，缺失只影响该功能）
+pymupdf==1.28.2
+pypdf==6.19.0
+python-docx==1.2.0
