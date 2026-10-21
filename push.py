@@ -64,6 +64,16 @@ def push_run_summary(run_id, error=None):
         od = ct.get("overdue", 0)
         content += (f"- 累计投递：**{ct['applied']}** 条"
                     + (f" ｜ ⏰ 其中 **{od}** 条投满3天没人理\n" if od else " ｜ 暂无石沉大海\n"))
+    # 阶段跟进提醒（手动标记的面试/Offer/未通过）
+    stage_bits = []
+    if ct.get("interview"):
+        stage_bits.append(f"📅 面试中 **{ct['interview']}**")
+    if ct.get("offer"):
+        stage_bits.append(f"🎉 已拿 Offer **{ct['offer']}**")
+    if ct.get("rejected"):
+        stage_bits.append(f"❌ 未通过 {ct['rejected']}")
+    if stage_bits:
+        content += "- 求职阶段：" + " ｜ ".join(stage_bits) + "\n"
     content += "\n"
     fresh = _db.new_jobs_of_run(run_id, 5)
     if fresh:
