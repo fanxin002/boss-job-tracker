@@ -247,6 +247,12 @@ def get_login_state():
         st = _json.load(open(STATE_FILE, encoding="utf-8"))
     except Exception:
         st = {"logged": False, "at": "", "note": ""}
+    # 交叉校验：状态文件说已登录，但 Cookie 里没有 wt2/bsti → 实际是游客态，
+    # 这里必须纠正，否则界面显示「已登录」而获取立刻报未登录（用户会以为坏了）
+    if st.get("logged") and not cookies_have_login():
+        st["logged"] = False
+        st["stale"] = True
+        st["note"] = "状态文件记录已登录，但 Cookie 里没有登录凭据（wt2），请重新登录"
     st["login_open"] = _login_open()
     return st
 
@@ -254,6 +260,26 @@ def get_login_state():
 def save_cookies(page):
     import json as _json
     _json.dump(_cookie_list(page), open(COOKIE_FILE, "w", encoding="utf-8"))
+
+
+LOGIN_COOKIES = ("wt2", "bsti")
+
+
+def cookies_have_login():
+    """读已保存的 Cookie 文件判断有没有登录凭据（wt2/bsti）。
+
+    只看 STATE_FILE 会误判：游客态也能过接口（code=0），但拿不到 wt2。
+    """
+    import json as _json
+    try:
+        ck = _json.load(open(COOKIE_FILE, encoding="utf-8"))
+    except Exception:
+        return False
+    for c in (ck or []):
+        name = c.get("name") if isinstance(c, dict) else getattr(c, "name", None)
+        if name in LOGIN_COOKIES:
+            return True
+    return False
 
 
 def inject_cookies(page):
@@ -363,17 +389,21 @@ def repair_flow(keyword="数据分析", city_code="101230200"):
                 result["msg"] = "修复窗口已被关闭，流程结束"
                 break
             code, msg = probe_api(page, keyword, city_code)
-            if code == 0:
+            logged = cookies_logged(page)      # 以 Cookie 里的 wt2/bsti 为准
+            if logged:
                 save_cookies(page)
-                set_login_state(True, "修复成功：接口已放行，Cookie已刷新")
-                clear_last_risk()
-                result.update(ok=True, msg="接口已放行，Cookie 已刷新，可以重新获取")
-                break
-            if code in (36, 37, 38, 401):
+                if code == 0:
+                    set_login_state(True, "修复成功：已登录且接口放行，Cookie 已刷新")
+                    clear_last_risk()
+                    result.update(ok=True, msg="已登录、接口放行，Cookie 已刷新，可以重新获取")
+                    break
+                # 已登录但接口仍被风控拦 → 继续等你在窗口里过验证
                 _record_risk(code, msg)
-                result["msg"] = f"仍被拦（code={code} {msg}）"
+                result["msg"] = f"已登录但接口仍被拦（code={code} {msg}），请在窗口里完成验证"
             else:
-                result["msg"] = f"探测异常 code={code} {msg}"
+                # 关键：接口放行 ≠ 已登录。游客态也能搜，但没有 wt2，获取轮会被拒
+                save_cookies(page)             # 反爬 cookie 先存，登录后覆盖
+                result["msg"] = "还没登录：请在弹出的窗口里扫码登录 BOSS（接口可用但游客态不算登录）"
             time.sleep(15)
         else:
             result["msg"] = "10分钟内接口仍未放行（建议等待更久，别连续点）"
@@ -907,25 +937,41 @@ def fetch_resume_text():
             _close_browser()
 
 
-def run_crawl(run_id, keywords, cities, pages, want_detail, headless=False, offscreen=False, degree=""):
+def run_crawl(run_id, keywords, cities, pages, want_detail, headless=False, offscreen=False,
+              degree="", progress=None):
     """整轮获取入口（后台线程调用）。返回 (fetched, new_cnt, offline_cnt)
+    progress: 可选回调 (done, total, note)，供前端进度条用
     全程静默：浏览器进程用完即关，不留窗口、不留僵尸"""
     logf = lambda s: db.append_run_log(run_id, s)  # noqa: E731
     covered, all_rows, run_ids = [], [], []
     try:
         return _crawl_body(run_id, keywords, cities, pages, want_detail, headless, offscreen,
-                           logf, covered, all_rows, run_ids, degree)
+                           logf, covered, all_rows, run_ids, degree, progress)
     finally:
         _close_browser()
         logf("浏览器已静默关闭（登录态保存在 Cookie，下次获取自动复用）")
 
 
 def _crawl_body(run_id, keywords, cities, pages, want_detail, headless, offscreen, logf,
-                covered, all_rows, run_ids, degree=""):
+                covered, all_rows, run_ids, degree="", progress=None):
     page = ensure_browser(headless, offscreen)
     inject_cookies(page)
     mode_txt = "无头静默" if headless else ("离屏有头" if offscreen else "有头")
     logf(f"浏览器就绪（{mode_txt}模式，窗口不会打扰你）")
+
+    # 进度：总任务 = 关键词 × 城市 × 页数（前端进度条用）
+    tot = max(1, len(keywords) * len(cities) * max(1, int(pages or 1)))
+    done = {"n": 0}
+
+    def _p(note=""):
+        if not progress:
+            return
+        try:
+            progress(min(done["n"], tot), tot, note)
+        except Exception:
+            pass
+
+    _p("准备浏览器")
 
     stopped = None  # 风控原因：中断后已抓到的数据仍照常入库
     pending = []    # 待落库（normalize 后）
@@ -970,12 +1016,20 @@ def _crawl_body(run_id, keywords, cities, pages, want_detail, headless, offscree
             time.sleep(random.uniform(3, 6))
             if not cookies_logged(page):
                 if headless or offscreen:
-                    raise RuntimeError("未登录：请点页面右上角「修复登录态」，在弹出的窗口完成登录/验证（成功后自动保存Cookie），然后重新获取")
+                    raise RuntimeError(
+                        "Cookie 里没有登录凭据（wt2）：请点顶部「BOSS」胶囊重新登录后再获取"
+                        "（游客态能搜列表，但接口不接受请求）")
                 wait_login(page, logf)
             collected = []   # 边抓边存：即使中途抛 StopCrawl 也不丢
+
+            def _on_page(allr, pno, _kw=kw, _cn=city["name"]):
+                _absorb(allr)
+                done["n"] += 1
+                _p(f"{_kw} · {_cn} 第 {pno} 页")
+
             try:
                 raw = fetch_via_api(page, kw, cc, pages, logf, degree,
-                                    collector=collected, on_page=lambda allr, pno: _absorb(allr))
+                                    collector=collected, on_page=_on_page)
                 if raw is None:
                     logf("  切换到滚动监听兜底方案…")
                     raw = fetch_via_listen(page, kw, cc, pages, logf, degree)
@@ -998,6 +1052,7 @@ def _crawl_body(run_id, keywords, cities, pages, want_detail, headless, offscree
 
     if not all_rows:
         logf("❌ 本轮未抓到任何数据" + (f"：{stopped}" if stopped else "（登录态失效或被风控）"))
+        _p("未抓到数据")
         return 0, 0, 0
 
     offline_cnt = db.mark_offline(covered, set(run_ids))
@@ -1006,4 +1061,6 @@ def _crawl_body(run_id, keywords, cities, pages, want_detail, headless, offscree
          f"薪资有值 {with_sal}/{len(all_rows)}")
     if stopped:
         logf(f"⚠️ 本轮因风控提前结束：{stopped}")
+    done["n"] = tot          # 收尾：即使某些组不到目标页数，也把进度补满
+    _p("入库完成")
     return len(all_rows), state["new"], offline_cnt
