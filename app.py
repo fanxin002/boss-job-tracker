@@ -107,6 +107,7 @@ def do_crawl(trigger="manual"):
         crawler.clear_last_risk()
         fetched, new_cnt, off_cnt = crawler.run_crawl(rid, keywords, cities, pages, detail,
                                                       headless, offscreen, degree)
+        _rescore(rid)   # 新岗位入库后立即按画像打分，避免「匹配」列全是 0
         if crawler.LAST_RISK.get("code") is not None:  # 本轮撞风控 → 上冷却锁
             risk = db.set_risk(crawler.LAST_RISK["code"], crawler.LAST_RISK["msg"])
             db.append_run_log(rid, f"🔒 已上风控冷却锁 {risk['remaining_min']} 分钟（{risk['until'][11:16]} 解除），期间不再自动重跑")
@@ -171,6 +172,7 @@ def do_crawl_liepin(trigger="manual"):
     try:
         fetched, new_cnt, off_cnt = liepin.run_crawl(rid, keywords, cities, lp_pages,
                                                      headless=headless, offscreen=offscreen)
+        _rescore(rid)   # 猎聘卡片没有技能标签，更依赖职位名/行业命中，同样要入库后立刻打分
         db.finish_run(rid, "success" if fetched else "empty", fetched, new_cnt, off_cnt)
         if push.has_token() and str(cfg.get("push_enabled", "1")) == "1":
             ok, msg = push.push_run_summary(rid)
@@ -553,6 +555,22 @@ def _log_detail(line):
     print(line, flush=True)
 
 
+def _rescore(rid=None):
+    """入库/补抓后重算匹配分。
+
+    之前只在「画像更新」时才算分，导致新抓进来的岗位（尤其猎聘）匹配分一直是 0。
+    """
+    try:
+        n = db.recompute_scores()
+        if rid:
+            db.append_run_log(rid, f"🎯 已按画像重算 {n} 条岗位匹配分")
+        return n
+    except Exception as e:
+        if rid:
+            db.append_run_log(rid, f"⚠️ 匹配分重算失败：{e}")
+        return 0
+
+
 def _do_details(job_ids, filters, limit):
     try:
         if job_ids:  # 只补勾选的
@@ -570,12 +588,17 @@ def _do_details(job_ids, filters, limit):
             total, rows = db.query_jobs({**f, "page": 1, "size": limit})
             jobs = rows
             scope = "当前筛选结果"
+        # 猎聘描述页与 BOSS 完全不同的结构：这里只处理 BOSS，猎聘行跳过并说明
+        lp = [j for j in jobs if (j.get("source") or "") == "liepin"]
+        jobs = [j for j in jobs if (j.get("source") or "") != "liepin"]
+        if lp:
+            _log_detail(f"⏭ 跳过 {len(lp)} 条猎聘岗位：猎聘描述页结构不同，暂不支持自动补抓")
         with _apply_lock:
             _detail_state.update(log=[], total=total, done=0)
         if not jobs:
-            _log_detail(f"{scope}里没有需要补抓的岗位（已有描述的会跳过）")
+            _log_detail(f"{scope}里没有需要补抓的 BOSS 岗位（已有描述的会跳过）")
             return
-        _log_detail(f"📄 {scope}：待补抓 {total} 条，本批 {len(jobs)} 条（每条约 3~6 秒，防风控）")
+        _log_detail(f"📄 {scope}：待补抓 {total} 条，本批 BOSS {len(jobs)} 条（每条约 3~6 秒，防风控）")
         crawler.clear_last_risk()
         ok, fail = crawler.backfill_details(
             jobs, _log_detail,
@@ -584,6 +607,10 @@ def _do_details(job_ids, filters, limit):
         if crawler.LAST_RISK.get("code") is not None:
             risk = db.set_risk(crawler.LAST_RISK["code"], crawler.LAST_RISK["msg"])
             _log_detail(f"🔒 已上风控冷却锁 {risk['remaining_min']} 分钟")
+            # 描述会进入匹配文本，补完必须重算，否则新描述不参与打分
+        if ok:
+            n = _rescore()
+            _log_detail(f"🎯 已按画像重算 {n} 条岗位匹配分")
     except Exception as e:
         _log_detail(f"❌ 补抓异常：{e}")
     finally:
@@ -656,8 +683,9 @@ def api_cities_sync_state():
 
 
 @app.get("/api/stats")
-def api_stats(days: int = 14):
-    return db.stats(max(7, min(days, 60)))
+def api_stats(days: int = 14, source: str = ""):
+    """看板聚合：source='' 全部 / 'boss' / 'liepin'"""
+    return db.stats(max(7, min(days, 60)), source=(source or "").strip())
 
 
 @app.get("/api/details_status")
@@ -731,10 +759,10 @@ def api_stage(body: StageIn):
 
 
 @app.get("/api/stages")
-def api_stages():
-    """阶段跟进视图数据：面试/Offer/未通过 三组 + 漏斗计数"""
+def api_stages(source: str = ""):
+    """阶段跟进视图数据：面试/Offer/未通过 三组 + 漏斗计数（支持按平台筛选）"""
     data = db.get_staged()
-    ct = db.counts()
+    ct = db.counts((source or "").strip())
     data["funnel"] = {
         "active": ct["active"], "applied": ct["applied"], "replied": ct["replied"],
         "interview": ct["interview"], "offer": ct["offer"], "rejected": ct["rejected"]}
@@ -881,7 +909,8 @@ def api_reply_sync():
             _reply_state["running"] = False
 
     threading.Thread(target=_run, daemon=True).start()
-    return {"ok": True, "msg": "已开始同步 BOSS 消息列表（只读，不会发消息）"}
+    return {"ok": True, "platform": "boss",
+            "msg": "已开始同步 BOSS 会话（只读，不会发消息）；猎聘不支持自动同步，请用「标记 HR 已回复」"}
 
 
 @app.get("/api/replies/state")
@@ -890,10 +919,15 @@ def api_reply_state():
 
 
 @app.get("/api/replies")
-def api_replies(limit: int = 200):
-    """已回复岗位列表（前端「HR 回复」页）"""
-    data = db.get_replied(min(max(limit, 1), 500))
+def api_replies(limit: int = 200, source: str = ""):
+    """已回复岗位列表（前端「HR 回复」页）。
+
+    自动同步只支持 BOSS（读 BOSS 会话列表里的公司名）；猎聘的回复在猎聘站内 IM，
+    需要登录态调私有接口，本工具不接入 —— 猎聘岗位只能用「手动标记 HR 已回复」。
+    """
+    data = db.get_replied(min(max(limit, 1), 500), source=(source or "").strip())
     data["sync"] = _reply_state
+    data["sync_supported"] = {"boss": True, "liepin": False}
     return data
 
 
@@ -1058,12 +1092,15 @@ def index():
 
 
 @app.get("/api/map")
-def api_map():
-    """内置地图点位：所有有坐标的岗位（在线地图瓦片由前端 Leaflet 加载）"""
-    pts = db.map_points()
+def api_map(source: str = ""):
+    """内置地图点位：有坐标的岗位（在线地图瓦片由前端 Leaflet 加载）。
+    source 过滤平台；猎聘卡片不带经纬度，所以猎聘通常无点位 —— 用 no_coord 说明原因。"""
+    src = (source or "").strip()
+    pts = db.map_points(src)
     lngs = [p["lng"] for p in pts]
     lats = [p["lat"] for p in pts]
-    return {"points": pts,
+    return {"points": pts, "source": src,
+            "no_coord": db.no_coord_stats().get(src, 0) if src else sum(db.no_coord_stats().values()),
             "center": [sum(lats) / len(lats), sum(lngs) / len(lngs)] if pts else [24.5, 118.1],
             "bounds": [min(lats), min(lngs), max(lats), max(lngs)] if pts else None}
 
