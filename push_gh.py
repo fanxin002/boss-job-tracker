@@ -6,8 +6,9 @@ TOKEN = os.environ.get("GH_TOKEN", "")
 OWNER, REPO, BRANCH = "fanxin002", "boss-job-tracker", "main"
 API = f"https://api.github.com/repos/{OWNER}/{REPO}/contents"
 ROOT = os.path.dirname(os.path.abspath(__file__))
-FILES = ["README.md", "static/index.html", "push_gh.py"]
-MSG = "fix: progress modal is re-openable via floating pill; log dialog above progress (z-index)"
+FILES = ["README.md", "static/index.html", "app.py", "crawler.py", "db.py",
+         "e2e_test.py", "liepin.py", "push_gh.py"]
+MSG = "fix: no more false 'offline' - require 2 consecutive misses + 60% coverage guard, add rollback"
 
 
 def req(url, data=None, method=None):
