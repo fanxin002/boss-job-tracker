@@ -6,8 +6,8 @@ TOKEN = os.environ.get("GH_TOKEN", "")
 OWNER, REPO, BRANCH = "fanxin002", "boss-job-tracker", "main"
 API = f"https://api.github.com/repos/{OWNER}/{REPO}/contents"
 ROOT = os.path.dirname(os.path.abspath(__file__))
-FILES = ["README.md", "app.py", "db.py", "e2e_test.py", "liepin.py", "static/index.html"]
-MSG = "feat: skill gap, conversion, schedule, bulk ops, liepin JD crawl, approx coords, backups, fuzzy dedupe, collapsed filters"
+FILES = ["README.md", "db.py", "e2e_test.py", "static/index.html"]
+MSG = "fix: mark liepin masked (headhunter) companies and exclude them from same-job merging"
 
 
 def req(url, data=None, method=None):
