@@ -1055,7 +1055,7 @@ def _crawl_body(run_id, keywords, cities, pages, want_detail, headless, offscree
         _p("未抓到数据")
         return 0, 0, 0
 
-    offline_cnt = db.mark_offline(covered, set(run_ids))
+    offline_cnt = db.mark_offline(covered, set(run_ids), source="boss", log=logf)
     with_sal = sum(1 for r in all_rows if r["salary"])
     logf(f"✅ 入库完成：共 {len(all_rows)} 条 ｜ 新增 {state['new']} ｜ 标记下线 {offline_cnt} ｜ "
          f"薪资有值 {with_sal}/{len(all_rows)}")
