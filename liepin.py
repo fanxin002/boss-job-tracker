@@ -301,7 +301,8 @@ def run_crawl(run_id, keywords, cities, pages, headless=False, offscreen=True, p
                     fetched += len(batch)
                     new_cnt += n
                     if covered_ok:
-                        offline_cnt += db.mark_offline([(kw, dq)], ids, source=SOURCE)
+                        offline_cnt += db.mark_offline([(kw, dq)], ids, source=SOURCE,
+                                                       log=logf)
                     logf(f"  入库 {len(batch)} 条（新增 {n}）")
     except Exception as e:
         logf(f"❌ 猎聘获取异常：{e}")
