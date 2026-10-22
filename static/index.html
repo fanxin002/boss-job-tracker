@@ -145,6 +145,7 @@
   .picker .box.focus{border-color:var(--ink)}
   .picker input{flex:1;width:auto;min-width:120px;height:28px;border:none;padding:0 6px;font-size:14px;font-weight:400;
     outline:none;box-shadow:none!important;background:transparent}
+  .ctag.nolp{background:#fffaf0;border-color:#f0c36d;color:#b45309}
   .ctag{display:inline-flex;align-items:center;gap:6px;background:var(--surface-soft);border:1px solid var(--hairline);
     color:var(--ink);padding:2px 8px;font-size:13px;line-height:1.6}
   .ctag i{font-style:normal;cursor:pointer;color:var(--muted-soft);font-size:13px}
@@ -166,6 +167,11 @@
 
   /* ---------- 筛选 ---------- */
   .filters{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:16px 16px}
+  /* 更多筛选：默认收起，展开后占满一整行，避免 17 个控件把首屏吃掉 */
+  .fmore{display:none;grid-column:1/-1;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;
+    padding-top:16px;margin-top:4px;border-top:1px dashed var(--hairline)}
+  .fmore.open{display:grid}
+  @media (max-width:1100px){.fmore{grid-template-columns:repeat(2,minmax(0,1fr))}}
   @media (max-width:1420px){.filters{grid-template-columns:repeat(3,minmax(0,1fr))}}
   .fcell{min-width:0}
   .fcell label{margin:0 0 6px;font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted)}
@@ -275,6 +281,26 @@
   .seg button.on{background:#111;color:#fff}
   .chart svg{display:block;width:100%;height:auto}
   .dgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:20px}
+  /* 技能缺口 */
+  .gapwrap{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+  @media (max-width:900px){.gapwrap{grid-template-columns:1fr}}
+  .gtitle{font-size:12px;font-weight:700;color:var(--muted);margin-bottom:8px;letter-spacing:.4px}
+  .gtitle.warn{color:#b45309}
+  .gbrow{display:flex;align-items:center;gap:10px;padding:3px 0;font-size:12px}
+  .gbl{flex:0 0 96px;color:var(--body);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .gbb{flex:0 0 200px;display:block;height:6px;background:#ececef;border-radius:3px;overflow:hidden}
+  .gbb i{display:block;height:100%;background:#111;border-radius:3px}
+  .gtitle.warn+.gbrow .gbb i,.gapwrap>div:nth-child(2) .gbb i{background:#e8a33d}
+  .gbn{flex:0 0 30px;text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
+  /* 转化 / 日程 */
+  table.mini{width:100%;border-collapse:collapse;font-size:12px}
+  table.mini th{text-align:left;color:var(--muted);font-weight:600;padding:6px 4px;border-bottom:1px solid var(--hairline)}
+  table.mini td{padding:6px 4px;border-bottom:1px solid #f6f6f7;font-variant-numeric:tabular-nums}
+  table.mini tr:last-child td{border-bottom:none}
+  .schedrow{display:flex;align-items:center;gap:12px;padding:9px 0;border-bottom:1px solid #f6f6f7;font-size:13px}
+  .schedrow:last-child{border-bottom:none}
+  .schedrow b{font-variant-numeric:tabular-nums;color:var(--ink);min-width:88px}
+  .schedrow em{color:#b45309;font-style:normal;font-size:12px}
   @media (max-width:1300px){.dgrid{grid-template-columns:repeat(2,1fr)}}
   .brow2{display:grid;grid-template-columns:78px 1fr 46px;gap:10px;align-items:center;font-size:12.5px;
     margin-bottom:10px}
@@ -319,9 +345,11 @@
   .toast{position:fixed;top:24px;left:50%;transform:translateX(-50%);background:var(--surface-dark);color:#fff;
     padding:12px 20px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:50}
   .toast.show{opacity:1}
-  .applybar{display:flex;align-items:center;gap:16px;background:var(--surface-soft);border:1px solid var(--hairline);
+  .applybar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--surface-soft);border:1px solid var(--hairline);
     padding:12px 16px;margin-bottom:16px;font-size:13px;flex-wrap:wrap}
   .applybar b{font-weight:700;color:var(--ink)}
+  .vsep{width:1px;height:20px;background:var(--hairline-strong);margin:0 2px}
+  #bulkStage{flex:0 0 auto;max-width:180px}
 
   /* 移动端塌缩 */
   @media (max-width:900px){
@@ -338,6 +366,13 @@
     .row2,.row3{grid-template-columns:1fr}
     .dash{grid-template-columns:1fr}
     .modal{padding:20px}
+    /* 窄屏：隐藏低价值列（标签/描述/发现），表格不用横向滚也能看清关键信息 */
+    table.jobs th:nth-child(7),table.jobs td:nth-child(7),
+    table.jobs th:nth-child(9),table.jobs td:nth-child(9),
+    table.jobs th:nth-child(11),table.jobs td:nth-child(11){display:none}
+    table.jobs th,table.jobs td{padding:8px 6px;font-size:12px}
+    .dcard{padding:16px}
+    .dkpis{grid-template-columns:1fr 1fr}
   }
 </style>
 </head>
@@ -401,12 +436,8 @@
         <div class="filters">
           <div class="fcell"><label>关键词</label><select id="fKeyword" onchange="applyFilters()"><option value="">全部</option></select></div>
           <div class="fcell"><label>城市</label><select id="fCity" onchange="applyFilters()"><option value="">全部</option></select></div>
-          <div class="fcell"><label>招聘状态</label><select id="fStatus" onchange="applyFilters()">
-            <option value="">在招+下线</option><option value="active">仅在招</option><option value="offline">仅已下线</option></select></div>
-          <div class="fcell"><label>投递状态</label><select id="fApplied" onchange="applyFilters()">
-            <option value="">全部</option><option value="0">未投递</option><option value="1">已投递</option><option value="2">投递失败</option></select></div>
-          <div class="fcell"><label>职位描述</label><select id="fDetail" onchange="applyFilters()">
-            <option value="">全部</option><option value="1">已有描述</option><option value="0">缺描述</option></select></div>
+          <div class="fcell"><label>平台</label><select id="fSource" onchange="applyFilters()">
+            <option value="">全部</option><option value="boss">BOSS直聘</option><option value="liepin">猎聘</option></select></div>
           <div class="fcell"><label>排序</label><select id="fSort" onchange="applyFilters()">
             <option value="match">匹配度 高到低</option>
             <option value="match_asc">匹配度 低到高</option>
@@ -421,28 +452,36 @@
             <option value="seen_desc">最近在看</option>
             <option value="first_desc">发现时间 新到旧</option>
             <option value="first_asc">发现时间 旧到新</option></select></div>
+          <div class="fcell"><label>全文搜索</label><input type="text" id="fQ" placeholder="岗位 / 公司 / 技能" onkeydown="if(event.key==='Enter')applyFilters()"></div>
+          <div class="fcell" style="display:flex;align-items:flex-end;gap:8px">
+            <button class="btn btn-primary" style="flex:1" onclick="applyFilters()">应用筛选</button>
+            <button class="btn btn-sm" id="btnMore" onclick="toggleMore()" title="薪资区间、学历、经验、阶段、超期等">更多 ▾</button>
+          </div>
 
-          <div class="fcell"><label>月薪下限 K</label><input type="number" id="fSalMin" min="0" placeholder="不限" onkeydown="if(event.key==='Enter')applyFilters()"></div>
-          <div class="fcell"><label>月薪上限 K</label><input type="number" id="fSalMax" min="0" placeholder="不限" onkeydown="if(event.key==='Enter')applyFilters()"></div>
-          <div class="fcell"><label>薪资明确性</label><select id="fNoSal" onchange="applyFilters()">
-            <option value="">全部</option><option value="1">有明确薪资</option><option value="2">薪资未知</option></select></div>
-          <div class="fcell"><label>学历</label><select id="fDegree" onchange="applyFilters()"><option value="">不限</option></select></div>
-          <div class="fcell"><label>经验</label><select id="fExp" onchange="applyFilters()"><option value="">不限</option></select></div>
-          <div class="fcell"><label>规模</label><select id="fScale" onchange="applyFilters()"><option value="">不限</option></select></div>
-
-          <div class="fcell"><label>行业包含</label><input type="text" id="fIndustry" placeholder="如 互联网" onkeydown="if(event.key==='Enter')applyFilters()"></div>
-          <div class="fcell"><label>标记</label><select id="fNew" onchange="applyFilters()"><option value="0">全部</option><option value="1">仅新增</option></select></div>
-          <div class="fcell"><label>收藏</label><select id="fStar" onchange="applyFilters()"><option value="">全部</option><option value="1">仅收藏</option></select></div>
-          <div class="fcell"><label>回复</label><select id="fReplied" onchange="applyFilters()"><option value="">全部</option><option value="1">HR 已回复</option><option value="0">未回复</option></select></div>
-          <div class="fcell"><label>投递超期</label><select id="fOverdue" onchange="applyFilters()">
-            <option value="">全部</option><option value="3">已投3天+没人理</option><option value="7">已投7天+没人理</option><option value="14">已投14天+没人理</option></select></div>
-          <div class="fcell"><label>求职阶段</label><select id="fStage" onchange="applyFilters()">
-            <option value="">全部</option><option value="interview">面试中</option><option value="offer">已拿 Offer</option><option value="rejected">未通过</option><option value="none">未进入阶段</option></select></div>
-          <div class="fcell"><label>平台</label><select id="fSource" onchange="applyFilters()">
-            <option value="">全部</option><option value="boss">BOSS直聘</option><option value="liepin">猎聘</option></select></div>
-          <div class="fcell"><label>同岗合并</label><select id="fDedupe" onchange="applyFilters()"><option value="">不合并</option><option value="1">合并同公司同岗位</option></select></div>
-          <div class="fcell" style="grid-column:span 1"><label>全文搜索</label><input type="text" id="fQ" placeholder="岗位 / 公司 / 技能" onkeydown="if(event.key==='Enter')applyFilters()"></div>
-          <div class="fcell" style="display:flex;align-items:flex-end"><button class="btn btn-primary" style="width:100%" onclick="applyFilters()">应用筛选</button></div>
+          <div class="fmore" id="fMore">
+            <div class="fcell"><label>招聘状态</label><select id="fStatus">
+              <option value="">在招+下线</option><option value="active">仅在招</option><option value="offline">仅已下线</option></select></div>
+            <div class="fcell"><label>投递状态</label><select id="fApplied">
+              <option value="">全部</option><option value="0">未投递</option><option value="1">已投递</option><option value="2">投递失败</option></select></div>
+            <div class="fcell"><label>职位描述</label><select id="fDetail">
+              <option value="">全部</option><option value="1">已有描述</option><option value="0">缺描述</option></select></div>
+            <div class="fcell"><label>月薪下限 K</label><input type="number" id="fSalMin" min="0" placeholder="不限" onkeydown="if(event.key==='Enter')applyFilters()"></div>
+            <div class="fcell"><label>月薪上限 K</label><input type="number" id="fSalMax" min="0" placeholder="不限" onkeydown="if(event.key==='Enter')applyFilters()"></div>
+            <div class="fcell"><label>薪资明确性</label><select id="fNoSal">
+              <option value="">全部</option><option value="1">有明确薪资</option><option value="2">薪资未知</option></select></div>
+            <div class="fcell"><label>学历</label><select id="fDegree"><option value="">不限</option></select></div>
+            <div class="fcell"><label>经验</label><select id="fExp"><option value="">不限</option></select></div>
+            <div class="fcell"><label>规模</label><select id="fScale"><option value="">不限</option></select></div>
+            <div class="fcell"><label>行业包含</label><input type="text" id="fIndustry" placeholder="如 互联网" onkeydown="if(event.key==='Enter')applyFilters()"></div>
+            <div class="fcell"><label>标记</label><select id="fNew"><option value="0">全部</option><option value="1">仅新增</option></select></div>
+            <div class="fcell"><label>收藏</label><select id="fStar"><option value="">全部</option><option value="1">仅收藏</option></select></div>
+            <div class="fcell"><label>回复</label><select id="fReplied"><option value="">全部</option><option value="1">HR 已回复</option><option value="0">未回复</option></select></div>
+            <div class="fcell"><label>投递超期</label><select id="fOverdue">
+              <option value="">全部</option><option value="3">已投3天+没人理</option><option value="7">已投7天+没人理</option><option value="14">已投14天+没人理</option></select></div>
+            <div class="fcell"><label>求职阶段</label><select id="fStage">
+              <option value="">全部</option><option value="interview">面试中</option><option value="offer">已拿 Offer</option><option value="rejected">未通过</option><option value="none">未进入阶段</option></select></div>
+            <div class="fcell"><label>同岗合并</label><select id="fDedupe"><option value="">不合并</option><option value="1">合并同公司同岗位</option></select></div>
+          </div>
         </div>
         <div class="fchips" id="filterChips"><span class="ph">未使用筛选条件</span></div>
       </div>
@@ -452,8 +491,15 @@
         <div class="applybar" id="applyBar" style="display:none">
           <b id="selCount">已选 0 条</b>
           <button class="btn btn-primary btn-sm" id="btnApply" onclick="applySelected()">投递选中岗位</button>
+          <span class="vsep"></span>
+          <button class="btn btn-sm" onclick="bulkAct('star','1')" title="给选中的岗位加星">收藏</button>
+          <select id="bulkStage" class="btn btn-sm" style="height:32px;padding:0 8px" onchange="if(this.value){bulkAct('stage',this.value);this.value=''}">
+            <option value="">批量标阶段…</option>
+            <option value="interview">面试中</option><option value="offer">Offer</option>
+            <option value="rejected">未通过</option><option value="clear">清除阶段</option></select>
+          <button class="btn btn-sm" onclick="bulkAct('replied','1')" title="把选中岗位标成 HR 已回复">标已回复</button>
           <button class="btn btn-sm" onclick="clearSel()">取消选择</button>
-          <span class="muted">串行投递，随机间隔，已投递的自动跳过</span>
+          <span class="muted" id="selHint"></span>
         </div>
         <div style="overflow-x:auto">
           <table class="jobs">
@@ -546,6 +592,24 @@
         </div>
         <div class="dgrid" style="grid-template-columns:1fr">
           <div class="dcard"><h3>HR 职位分布</h3><div id="dashBossTitle"></div></div>
+        </div>
+        <div class="dcard">
+          <h3>技能缺口 <span class="right" id="dashGapSub"></span></h3>
+          <div id="dashSkillGap"></div>
+        </div>
+        <div class="dcard">
+          <h3>投递转化
+            <span class="seg" id="segConv">
+              <button class="on" data-by="source">平台</button>
+              <button data-by="scale">规模</button>
+              <button data-by="keyword">关键词</button>
+            </span>
+          </h3>
+          <div id="dashConv"></div>
+        </div>
+        <div class="dcard">
+          <h3>跟进日程 <span class="right" id="dashSchedSub"></span></h3>
+          <div id="dashSchedule"></div>
         </div>
         <div class="dcard">
           <h3>岗位地理分布
@@ -707,6 +771,18 @@
       </div>
       <button class="btn btn-sm" onclick="saveStageFromJob()">标记阶段</button>
     </div>
+    <div style="margin-top:12px;display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+      <div style="flex:1;min-width:200px">
+        <label style="margin:0 0 6px">跟进时间（面试 / 复聊）<span class="help" title="填了会出现在看板「跟进日程」，到期先按日期排序">?</span></label>
+        <input type="datetime-local" id="jobNextAt" style="width:100%">
+      </div>
+      <div style="flex:1;min-width:160px">
+        <label style="margin:0 0 6px">日程备注</label>
+        <input type="text" id="jobNextNote" maxlength="100" placeholder="如：二面 · 视频 30 分钟">
+      </div>
+      <button class="btn btn-sm" onclick="saveNextAt()">保存日程</button>
+      <button class="btn btn-sm" onclick="clearNextAt()">清除</button>
+    </div>
     <div class="foot">
       <a class="btn btn-sm" id="jobOpen" target="_blank" style="color:var(--ink);text-decoration:none;display:inline-flex;align-items:center">在 BOSS 打开</a>
       <button class="btn btn-sm" onclick="saveNote()">保存备注</button>
@@ -796,10 +872,17 @@ function switchView(v){
 
 /* ========== 城市选择器 ========== */
 let citySel=[];
+let LP_CITIES=[];      // 猎聘支持的城市名（后端 /api/liepin_cities）
+async function loadLpCities(){
+  try{const d=await(await fetch('/api/liepin_cities')).json();LP_CITIES=d.cities||[]}catch(e){LP_CITIES=[]}
+}
+function lpSupports(name){return !LP_CITIES.length||LP_CITIES.includes(name)}
 function renderCityTags(){
-  document.getElementById('cityTags').innerHTML=citySel.map((c,i)=>
-    `<span class="ctag">${esc(c.name)}<i onclick="removeCity(${i})">×</i></span>`).join('');
-  updateCrawlHint();
+  document.getElementById('cityTags').innerHTML=citySel.map((c,i)=>{
+    const okLp=lpSupports(c.name);
+    return `<span class="ctag ${okLp?'':'nolp'}" title="${okLp?'':'猎聘不支持该城市，猎聘轮会跳过'}">${esc(c.name)}${okLp?'':' ⚠'}<i onclick="removeCity(${i})">×</i></span>`;
+  }).join('');
+  updateCrawlHint();platWarnHint();
 }
 function removeCity(i){citySel.splice(i,1);renderCityTags();markDirty()}
 function focusCity(){document.getElementById('cityInput').focus()}
@@ -829,7 +912,7 @@ function renderCityDrop(q){
   if(!list.length){drop.innerHTML='<div class="none">没有匹配的城市</div>';drop.classList.add('show');return}
   drop.innerHTML=list.map((c,i)=>
     `<div class="ditem ${i===0?'on':''}" onclick="addCityByCode('${c.code}','${esc(c.name)}')">${esc(c.name)}
-      <span class="p">${esc(c.province||'')}</span></div>`).join('');
+      <span class="p">${esc(c.province||'')}${lpSupports(c.name)?'':' · 猎聘不支持'}</span></div>`).join('');
   drop.classList.add('show');cityIdx=0;
 }
 function bindCityPicker(){
@@ -944,6 +1027,8 @@ function platWarnHint(){
   if(PLAT_STATE.includes('liepin')){
     const d=document.getElementById('dotLp');
     if(d&&!d.classList.contains('ok'))msgs.push('猎聘未登录：点顶部「猎聘」胶囊登录（不登录也能跑，结果可能不全）');
+    const bad=(citySel||[]).filter(c=>!lpSupports(c.name)).map(c=>c.name);
+    if(bad.length)msgs.push(`猎聘没有这些城市的城市码：${bad.join('、')}（猎聘轮会直接跳过，可改 liepin.py CITY_CODE 补）`);
   }
   el.innerHTML=msgs.length?'<div class="note">'+msgs.join('；')+'。</div>':'';
 }
@@ -1386,6 +1471,15 @@ const FT={'status':{'active':'仅在招','offline':'仅已下线'},'applied':{'0
           'star_desc':'收藏优先','company_asc':'公司名 A-Z','company_desc':'公司名 Z-A',
           'new':'新增优先','seen_desc':'最近在看','first_desc':'发现时间 新到旧','first_asc':'发现时间 旧到新'}};
 function readFilters(){const o={};FF.forEach(([id,k])=>o[k]=document.getElementById(id).value);return o}
+/* 更多筛选展开/收起：状态记在 localStorage，第二次进来保持上次的选择 */
+function toggleMore(force){
+  const el=document.getElementById('fMore'),btn=document.getElementById('btnMore');
+  if(!el)return;
+  const open=(typeof force==='boolean')?force:!el.classList.contains('open');
+  el.classList.toggle('open',open);
+  if(btn)btn.textContent=open?'收起 ▴':'更多 ▾';
+  try{localStorage.setItem('fMoreOpen',open?'1':'0')}catch(e){}
+}
 function filterQuery(){const o=readFilters();return Object.keys(o).map(k=>k+'='+encodeURIComponent(o[k])).join('&')}
 function renderChips(){
   const o=readFilters(),box=document.getElementById('filterChips'),chips=[];
@@ -1498,7 +1592,7 @@ async function loadJobs(p){
           :(j.applied===1?'<span class="muted">已投</span>'
           :`<button class="btn btn-sm" onclick="applyOne('${esc(j.job_id)}')">投递</button>`));
     return `<tr class="${sel.has(j.job_id)?'sel':''}">
-      <td><input type="checkbox" data-jid="${esc(j.job_id)}" ${sel.has(j.job_id)?'checked':''} ${j.status==='offline'||isLp?'disabled':''} onchange="toggleSel(this)"></td>
+      <td><input type="checkbox" data-jid="${esc(j.job_id)}" ${sel.has(j.job_id)?'checked':''} ${j.status==='offline'?'disabled':''} onchange="toggleSel(this)"></td>
       <td class="plat">${platIcon(j.source)}</td>
       <td><a class="job-title" onclick="openJob('${esc(j.job_id)}')" title="点击查看详情（备注 / 求职阶段 / 完整描述）">${esc(j.job_name)}</a><a class="ext" href="${esc(j.job_url)}" target="_blank" title="到原网站打开该岗位" onclick="event.stopPropagation()">↗</a> ${dup}<div class="muted">${esc(j.keyword||'')}${j.industry?' / '+esc(j.industry):''}</div></td>
       <td>${j.salary?`<span class="tag tag-sal">${esc(j.salary)}</span>`:'<span class="muted">未知</span>'}</td>
@@ -1578,8 +1672,26 @@ async function openJob(jid){
   rb.dataset.replied=j.replied===1?'1':'0';
   document.getElementById('jobStageSel').value=(j.stage&&['interview','offer','rejected'].includes(j.stage))?j.stage:'';
   document.getElementById('jobStageNote').value=j.stage_note||'';
+  document.getElementById('jobNextAt').value=(j.next_at||'').replace(' ','T').slice(0,16);
+  document.getElementById('jobNextNote').value=j.next_note||'';
   document.getElementById('jobMask').classList.add('show');
   document.getElementById('jobDesc').scrollTop=0;
+}
+async function saveNextAt(){
+  if(!curJobId){toast('请先打开一个岗位');return}
+  const raw=document.getElementById('jobNextAt').value;
+  const note=document.getElementById('jobNextNote').value;
+  const at=(raw||'').replace('T',' ');
+  const r=await(await fetch('/api/next_at',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({job_id:curJobId,at,note})})).json();
+  toast(r.msg);
+  if(r.ok){const j=JOB_CACHE[curJobId];if(j){j.next_at=at;j.next_note=note}}
+}
+async function clearNextAt(){
+  if(!curJobId)return;
+  document.getElementById('jobNextAt').value='';
+  document.getElementById('jobNextNote').value='';
+  await saveNextAt();
 }
 function closeJob(){document.getElementById('jobMask').classList.remove('show')}
 function applyFromJob(){const id=curJobId;closeJob();if(id)applyOne(id)}
@@ -1637,13 +1749,29 @@ async function saveNote(){
 /* ========== 投递 ========== */
 let applyRunning=false,applyTimer=null;
 function updateApplyBar(){
+  const ids=[...sel];
+  const lpn=ids.filter(i=>((JOB_CACHE[i]||{}).source||'boss')==='liepin').length;
+  const bossN=ids.length-lpn;
   document.getElementById('applyBar').style.display=sel.size?'flex':'none';
   document.getElementById('selCount').textContent=`已选 ${sel.size} 条`;
-  document.getElementById('btnApply').disabled=applyRunning;
+  const b=document.getElementById('btnApply');
+  b.disabled=applyRunning||bossN===0;
+  b.textContent=bossN?`投递 BOSS ${bossN} 条`:'投递（猎聘走官网）';
+  const h=document.getElementById('selHint');
+  if(h)h.textContent=lpn?`猎聘 ${lpn} 条不能批量投递，已自动排除（收藏/阶段/已回复仍可批量）`:'';
+}
+/* 批量操作：收藏 / 阶段 / 已回复（两平台都支持，不需要登录态） */
+async function bulkAct(action,value){
+  const ids=[...sel];if(!ids.length){toast('先勾选岗位');return}
+  const r=await(await fetch('/api/bulk',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({job_ids:ids,action,value:value==='clear'?'':value})})).json();
+  toast(r.msg);
+  if(r.ok){loadJobs(curPage);refreshStats();updateApplyBar()}
 }
 async function applySelected(){
   if(applyRunning){toast('投递进行中');return}
-  const ids=[...sel];if(!ids.length)return;
+  const ids=[...sel].filter(i=>((JOB_CACHE[i]||{}).source||'boss')!=='liepin');
+  if(!ids.length){toast('选中的都是猎聘岗位：批量投递只支持 BOSS，请到猎聘官网投递');return}
   const d=await uiDialog({title:'确认投递',okText:`投递 ${ids.length} 条`,danger:true,
     html:`<div class="note warn">会真实向 HR 发起打招呼，无法撤回。</div>
       <p>共 ${ids.length} 条，串行执行，按配置间隔，预计约 ${Math.ceil(ids.length*21/60)} 分钟。</p>
@@ -1789,6 +1917,56 @@ async function renderFunnel(){
     return `<div class="fstep"><b>${s[1]}</b><div class="lb">${s[0]}</div><div class="rate">${rate?('转化 '+rate):'&nbsp;'}</div></div>`;
   }).join('')+(f.rejected?`<div class="fstep"><b style="color:var(--muted-soft)">${f.rejected}</b><div class="lb">未通过</div><div class="rate">&nbsp;</div></div>`:'');
 }
+/* ========== 技能缺口 / 投递转化 / 跟进日程 ========== */
+let convBy='source';
+function gapRows(list){
+  if(!list.length)return '<div class="muted" style="padding:6px 0">—</div>';
+  const max=Math.max(1,...list.map(x=>x.jobs));
+  return list.map(x=>{
+    const w=Math.max(4,Math.round(x.jobs*200/max));   // 固定 200px 轨道内按比例（不依赖 flex/% 计算）
+    return `<div class="gbrow" title="${esc(x.skill)}：${x.jobs} 个岗位提到（${x.pct}%）">
+    <span class="gbl">${esc(x.skill)}</span>
+    <span class="gbb"><i style="width:${w}px"></i></span>
+    <span class="gbn">${x.jobs}</span></div>`}).join('');
+}
+async function loadSkillGap(){
+  const box=document.getElementById('dashSkillGap');if(!box)return;
+  let d={};
+  try{d=await(await fetch('/api/skills/gap'+(dashSource?'?source='+dashSource:''))).json()}catch(e){}
+  const sub=document.getElementById('dashGapSub');
+  if(sub)sub.textContent=d.total?`基于 ${d.total} 条在招 JD · 覆盖 ${d.coverage}%`:'';
+  box.innerHTML=`<div class="gapwrap">
+    <div><div class="gtitle">岗位要 · 我有</div>${gapRows(d.have||[])}</div>
+    <div><div class="gtitle warn">岗位要 · 我缺</div>${gapRows(d.gap||[])}</div>
+  </div>`;
+}
+async function loadConv(){
+  const box=document.getElementById('dashConv');if(!box)return;
+  let d={rows:[]};
+  try{d=await(await fetch(`/api/conversion?by=${convBy}`+(dashSource?'&source='+dashSource:''))).json()}catch(e){}
+  const rows=(d.rows||[]);
+  box.innerHTML=rows.length?`<table class="mini"><thead><tr>
+      <th>${({source:'平台',scale:'规模',keyword:'关键词'})[convBy]||''}</th>
+      <th>岗位</th><th>已投</th><th>回复</th><th>回复率</th><th>面试</th></tr></thead><tbody>
+    ${rows.slice(0,8).map(r=>`<tr><td>${esc(r.label||'—')}</td><td>${r.total}</td><td>${r.applied||0}</td>
+      <td>${r.replied||0}</td><td>${r.applied?r.reply_rate+'%':'—'}</td><td>${r.interview||0}</td></tr>`).join('')}
+    </tbody></table>`:'<div class="muted">暂无数据</div>';
+}
+async function loadSchedule(){
+  const box=document.getElementById('dashSchedule');if(!box)return;
+  let d={rows:[]};
+  try{d=await(await fetch('/api/schedule?days=14')).json()}catch(e){}
+  const rows=d.rows||[];
+  const sub=document.getElementById('dashSchedSub');
+  if(sub)sub.textContent=rows.length?`未来 14 天 ${rows.length} 项`:'';
+  box.innerHTML=rows.length?rows.map(r=>`<div class="schedrow">
+      <b>${esc((r.next_at||'').slice(5,16))}</b>
+      <a class="job-title" onclick="openJob('${esc(r.job_id)}')">${esc((r.job_name||'').slice(0,26))}</a>
+      <span class="muted">${esc(r.company||'')}</span>
+      ${r.next_note?`<em>${esc(r.next_note)}</em>`:''}
+      ${platIcon(r.source)}
+    </div>`).join(''):'<div class="muted" style="padding:8px 0">还没有安排。在岗位详情里设「跟进时间」，面试/复聊都会排到这里。</div>';
+}
 async function loadStats(){
   const s=await(await fetch('/api/stats?days='+dashDays+(dashSource?'&source='+dashSource:''))).json();
   // 平台筛选提示：各平台条数固定显示，方便判断筛选后是否为空
@@ -1825,6 +2003,7 @@ async function loadStats(){
   document.getElementById('dkDescSub').textContent=
     `已有 ${s.desc_done} 条，待补 ${s.total-s.desc_done} 条`+
     (s.proxy?` ｜ 代招 ${s.proxy}`:'');
+  loadSkillGap();loadConv();loadSchedule();
   renderDashMap();
 }
 function bindSeg(){
@@ -1841,6 +2020,13 @@ function bindSeg(){
       dashSource=b.dataset.s||'';
       document.querySelectorAll('#segSource button').forEach(x=>x.classList.toggle('on',x===b));
       loadStats();
+    };
+  });
+  document.querySelectorAll('#segConv button').forEach(b=>{
+    b.onclick=()=>{
+      convBy=b.dataset.by||'source';
+      document.querySelectorAll('#segConv button').forEach(x=>x.classList.toggle('on',x===b));
+      loadConv();
     };
   });
 }
@@ -1860,12 +2046,15 @@ function loadMapPoints(source){
 function clearMapCache(){Object.keys(_mapCache).forEach(k=>{delete _mapCache[k]})}
 function circleMarker(p){
   const color=p.applied===1?'#c92a2a':(p.status==='offline'?'#bdbdbd':'#1c69d4');
-  const m=L.circleMarker([p.lat,p.lng],{radius:7,color:'#fff',weight:1.5,fillColor:color,fillOpacity:.95});
+  const approx=!!p.coord_approx;
+  const m=L.circleMarker([p.lat,p.lng],{radius:approx?9:7,color:'#fff',weight:1.5,
+    fillColor:color,fillOpacity:approx?.55:.95,dashArray:approx?'2,2':null});
   const addr=[p.city_name,p.area_district,p.business_district].filter(Boolean).join(' ');
   m.bindPopup(
     `<b>${esc(p.job_name)}</b><div class="pp-muted">${esc(p.company||'')}</div>`+
     `<div>${esc(p.salary||'薪资未知')}${p.match_score?' ｜ 匹配 '+p.match_score+'分':''}</div>`+
     (addr?`<div class="pp-muted">📍 ${esc(addr)}</div>`:'')+
+    (approx?'<div class="pp-muted">≈ 区级近似位置（猎聘卡片不带坐标，按同区岗位推算）</div>':'')+
     (p.boss_name?`<div class="pp-muted">HR：${esc(p.boss_name)}${p.boss_title?'（'+esc(p.boss_title)+'）':''}</div>`:'')+
     `<a class="pp-btn" href="${esc(p.job_url||'#')}" target="_blank" style="margin-right:6px">岗位详情</a>`+
     (p.applied!==1&&p.status!=='offline'?`<button class="pp-btn" onclick="applyOne('${esc(p.job_id)}');closeMap()">投递</button>`:'')+
@@ -1927,12 +2116,16 @@ async function renderDashMap(){
   const act=pts.filter(p=>p.status==='active');
   const note=document.getElementById('dashMapNote');
   if(note){
+    const allApprox=pts.length&&pts.every(p=>p.coord_approx);
     if(!pts.length){
       note.classList.add('show');
       note.textContent=dashSource==='liepin'
-        ? `猎聘搜索接口返回的是职位卡片，本身不含经纬度，所以地图上没有点位（当前 ${d.no_coord||0} 条猎聘岗位）。地理分布请看上方「城市分布」，或切到「全部 / BOSS」看地图。`
+        ? `猎聘搜索卡片不含经纬度，且本城还没有 BOSS 岗位可作参照，暂时无法推算位置（当前 ${d.no_coord||0} 条）。先抓一轮 BOSS，猎聘点位会自动补上。`
         : (dashSource?`${PLAT_NAME[dashSource]}当前没有带坐标的岗位（${d.no_coord||0} 条缺坐标）。`
                       :'暂无带坐标的岗位；抓过一轮后就会自动上图。');
+    }else if(allApprox){
+      note.classList.add('show');
+      note.textContent='猎聘卡片不带经纬度：这些点位是按「同城同区 BOSS 岗位坐标中位数」推算的区级近似（半透明虚线圆），只看大区分布，不是楼宇级位置。补抓过详情的岗位会更准。';
     }else note.classList.remove('show');
   }
   document.getElementById('dashMapSub').textContent=
@@ -1971,6 +2164,11 @@ function bindMapSeg(){
   bindCityPicker();
   bindSeg();
   bindMapSeg();
+  await loadLpCities();
+  // 更多筛选：恢复上次展开状态 + 下拉改动即生效
+  try{if(localStorage.getItem('fMoreOpen')==='1')toggleMore(true)}catch(e){}
+  const fm=document.getElementById('fMore');
+  if(fm)fm.addEventListener('change',e=>{if(e.target&&e.target.tagName==='SELECT')applyFilters()});
   await loadCities();
   await loadConfig();
   await refreshFilters();

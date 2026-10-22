@@ -3,6 +3,7 @@
 主键 = encryptJobId（BOSS岗位稳定唯一ID，跨天不变，天然去重不重复抓）"""
 import json
 import os
+import re
 import sqlite3
 import threading
 from datetime import datetime
@@ -108,6 +109,32 @@ CREATE TABLE IF NOT EXISTS applications (
 STAGES = ("interview", "offer", "rejected")
 STAGE_LABELS = {"interview": "面试", "offer": "Offer", "rejected": "未通过"}
 
+# 跨平台同岗合并：去掉公司名/岗位名里的通用噪声词再拼键，
+# 让「瀚天天成电子科技(厦门)股份有限公司」与「瀚天天成电子科技」、
+# 「数据分析师」与「数据分析（急聘）」落到同一个 key。
+_CO_NOISE = ("股份有限公司", "有限责任公司", "有限公司", "股份", "集团", "控股",
+             "科技", "网络", "信息", "技术", "实业", "电子", "（", "）", "(", ")", "·", " ")
+_JB_NOISE = ("急聘", "急招", "高薪", "双休", "包吃住", "五险一金", "长期有效",
+             "（", "）", "(", ")", "【", "】", "/", "-", "—", " ", "　", "·")
+
+
+def dedupe_key(company, job_name):
+    """同岗合并键：公司名 + 岗位名归一（供 GROUP BY 用）。
+
+    括号里的内容（分公司/门店/城市分支、「急聘」这类前缀）整段丢掉，
+    否则「甲公司(厦门)」和「甲公司」会算出两个键。
+    """
+    def clean(s, noise):
+        s = re.sub(r"[（(][^）)]*[）)]", "", s or "")   # 去括号及内容
+        s = s.lower()
+        for n in noise:
+            s = s.replace(n, "")
+        return s
+    co = clean(company, _CO_NOISE)
+    nm = clean(job_name, _JB_NOISE)
+    return (co + "|" + nm) if (co or nm) else ""
+
+
 COLS = ["job_id", "lid", "security_id", "keyword", "city_code", "city_name", "job_name",
         "salary", "company", "scale", "industry", "degree", "experience", "skills",
         "welfare", "boss_name", "area_district", "business_district", "lng", "lat",
@@ -116,7 +143,7 @@ COLS = ["job_id", "lid", "security_id", "keyword", "city_code", "city_name", "jo
         "last_seen", "is_new", "status",
         "boss_title", "brand_stage", "job_labels",
         "days_per_week", "least_month", "proxy_job", "gold_hunter",
-        "encrypt_brand_id", "boss_avatar", "source"]
+        "encrypt_brand_id", "boss_avatar", "source", "dedupe_key"]
 
 # 薪资「空值不覆盖」：游客态/风控降级时接口会返回空 salaryDesc，
 # 若直接覆盖会把之前登录态抓到的真实薪资抹掉。仅当新值非空/非NULL才更新。
@@ -138,7 +165,13 @@ ON CONFLICT(job_id) DO UPDATE SET
     proxy_job=excluded.proxy_job, gold_hunter=excluded.gold_hunter,
     encrypt_brand_id=CASE WHEN excluded.encrypt_brand_id<>'' THEN excluded.encrypt_brand_id ELSE jobs.encrypt_brand_id END,
     boss_avatar=CASE WHEN excluded.boss_avatar<>'' THEN excluded.boss_avatar ELSE jobs.boss_avatar END,
-    detail_text=COALESCE(NULLIF(excluded.detail_text,''),jobs.detail_text)
+    detail_text=COALESCE(NULLIF(excluded.detail_text,''),jobs.detail_text),
+    dedupe_key=excluded.dedupe_key,
+    lat=CASE WHEN excluded.lat<>'' THEN excluded.lat ELSE jobs.lat END,
+    lng=CASE WHEN excluded.lng<>'' THEN excluded.lng ELSE jobs.lng END,
+    coord_approx=CASE WHEN excluded.lat<>'' THEN 0 ELSE COALESCE(jobs.coord_approx,0) END,
+    area_district=CASE WHEN excluded.area_district<>'' THEN excluded.area_district ELSE jobs.area_district END,
+    welfare=CASE WHEN excluded.welfare<>'' THEN excluded.welfare ELSE jobs.welfare END
 """
 
 
@@ -151,6 +184,7 @@ def conn():
 def _migrate(c):
     """列级增量迁移：旧库自动补新列，不丢数据"""
     cols = {r["name"] for r in c.execute("PRAGMA table_info(jobs)")}
+    added = set()
     for col, typ in [("salary_min", "INTEGER"), ("salary_max", "INTEGER"),
                      ("applied", "INTEGER DEFAULT 0"), ("applied_at", "TEXT"),
                      ("starred", "INTEGER DEFAULT 0"), ("note", "TEXT"),
@@ -162,11 +196,33 @@ def _migrate(c):
                      ("proxy_job", "INTEGER DEFAULT 0"), ("gold_hunter", "INTEGER DEFAULT 0"),
                      ("encrypt_brand_id", "TEXT"), ("boss_avatar", "TEXT"),
                      ("stage", "TEXT"), ("stage_at", "TEXT"), ("stage_note", "TEXT"),
-                     ("source", "TEXT DEFAULT 'boss'")]:
+                     ("source", "TEXT DEFAULT 'boss'"),
+                     # 地图：坐标是否为「区级近似」（猎聘没有坐标，用同区 BOSS 岗位中位点推断）
+                     ("coord_approx", "INTEGER DEFAULT 0"),
+                     # 跟进日程：下次面试/沟通时间与备注
+                     ("next_at", "TEXT"), ("next_note", "TEXT"),
+                     # 跨平台同岗合并键（公司名+岗位名归一后）
+                     ("dedupe_key", "TEXT")]:
         if col not in cols:
             c.execute(f"ALTER TABLE jobs ADD COLUMN {col} {typ}")
+            added.add(col)
     # source 是后加列：存量行补默认值（ALTER 加的列带 DEFAULT 只对新行生效）
     c.execute("UPDATE jobs SET source='boss' WHERE source IS NULL")
+    if "dedupe_key" in added:   # 首次加列：给存量行算一遍，否则前端「同岗合并」全是空键
+        for r in c.execute("SELECT job_id, company, job_name FROM jobs").fetchall():
+            c.execute("UPDATE jobs SET dedupe_key=? WHERE job_id=?",
+                      (dedupe_key(r["company"], r["job_name"]), r["job_id"]))
+    # 归一算法升级（v2 起连括号内容一起丢）：版本不一致就整体重算一次
+    try:
+        ver = c.execute("SELECT value FROM config WHERE key='dedupe_key_ver'").fetchone()
+        if not ver or ver["value"] != "2":
+            for r in c.execute("SELECT job_id, company, job_name FROM jobs").fetchall():
+                c.execute("UPDATE jobs SET dedupe_key=? WHERE job_id=?",
+                          (dedupe_key(r["company"], r["job_name"]), r["job_id"]))
+            c.execute("INSERT INTO config(key,value) VALUES('dedupe_key_ver','2') "
+                      "ON CONFLICT(key) DO UPDATE SET value='2'")
+    except Exception:
+        pass
     rcols = {r["name"] for r in c.execute("PRAGMA table_info(runs)")}
     if "source" not in rcols:
         c.execute("ALTER TABLE runs ADD COLUMN source TEXT DEFAULT 'boss'")
@@ -274,6 +330,7 @@ def upsert_jobs(rows, run_id):
                 1 if j.get("proxy_job") else 0, 1 if j.get("gold_hunter") else 0,
                 j.get("encrypt_brand_id", ""), j.get("boss_avatar", ""),
                 j.get("source") or "boss",
+                j.get("dedupe_key") or dedupe_key(j.get("company"), j.get("job_name")),
             ]
             c.execute(UPSERT_SQL, params)
         c.commit()
@@ -419,14 +476,16 @@ def _build_where(filters):
 
 def query_jobs(filters: dict):
     c = conn()
+    _migrate(c)      # dedupe_key / coord_approx 等新列兜底
     ws, params = _build_where(filters)
     order = _SORTABLE.get(filters.get("sort") or "default", _SORTABLE["salary_desc"])
     size = min(int(filters.get("size") or 50), 200)
     page = max(1, int(filters.get("page") or 1))
     if str(filters.get("dedupe") or "") == "1":
-        # 同公司同岗位名合并展示，保留排序最靠前的一条，并带出重复条数
-        base = (f"SELECT *, COUNT(*) OVER (PARTITION BY company, job_name) AS dup_count, "
-                f"ROW_NUMBER() OVER (PARTITION BY company, job_name ORDER BY {order}) AS _rn "
+        # 同公司同岗位合并：用归一后的 dedupe_key，跨平台不同写法（有限公司/（急聘））也能合上
+        dk = "COALESCE(NULLIF(dedupe_key,''), company || '|' || job_name)"
+        base = (f"SELECT *, COUNT(*) OVER (PARTITION BY {dk}) AS dup_count, "
+                f"ROW_NUMBER() OVER (PARTITION BY {dk} ORDER BY {order}) AS _rn "
                 f"FROM jobs {ws}")
         total = c.execute(f"SELECT COUNT(*) FROM ({base}) WHERE _rn=1", params).fetchone()[0]
         rows = c.execute(f"SELECT * FROM ({base}) WHERE _rn=1 ORDER BY {order} LIMIT ? OFFSET ?",
@@ -776,11 +835,19 @@ def set_applied(job_ids, applied, clear=False):
         return cur.rowcount
 
 
-def set_detail(job_id, text):
-    """回填职位描述"""
+def set_detail(job_id, text, welfare=None, area=None):
+    """回填职位描述（可顺带补福利标签与区县）"""
+    sets, params = ["detail_text=?"], [text or ""]
+    if welfare:
+        sets.append("welfare=?")
+        params.append(welfare)
+    if area:
+        sets.append("area_district=?")
+        params.append(area)
+    params.append(job_id)
     with _lock:
         c = conn()
-        cur = c.execute("UPDATE jobs SET detail_text=? WHERE job_id=?", (text or "", job_id))
+        cur = c.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE job_id=?", params)
         c.commit()
         c.close()
         return cur.rowcount
@@ -984,7 +1051,7 @@ def map_points(source=""):
     cond = " AND source=?" if src else ""
     rows = c.execute(
         "SELECT job_id, job_name, company, salary, salary_min, salary_max, city_name, area_district, "
-        "COALESCE(source,'boss') source, "
+        "COALESCE(source,'boss') source, COALESCE(coord_approx,0) coord_approx, "
         "business_district, lng, lat, boss_name, boss_title, status, applied, match_score, job_url "
         "FROM jobs WHERE lng IS NOT NULL AND lng<>'' AND lat IS NOT NULL AND lat<>''" + cond +
         " ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, "
@@ -1013,6 +1080,235 @@ def no_coord_stats():
             "WHERE lng IS NULL OR lng='' OR lat IS NULL OR lat='' GROUP BY source").fetchall()
         c.close()
     return {r["source"]: r["n"] for r in rows}
+
+
+def fill_approx_coords(source="liepin"):
+    """给没有坐标的岗位补「区级近似坐标」。
+
+    猎聘搜索卡片与详情页都不带经纬度，所以用**同城同区的 BOSS 岗位坐标中位数**推断，
+    写入 coord_approx=1，前端会明确标注「区级近似」，不假装是精确位置。
+    同区没有样本时退回同城中位数。返回 {district, city} 命中数。
+    """
+    from collections import defaultdict
+    with _lock:
+        c = conn()
+        _migrate(c)
+        rows = c.execute(
+            "SELECT city_name, area_district, lng, lat FROM jobs "
+            "WHERE COALESCE(source,'boss')='boss' AND lng<>'' AND lat<>'' "
+            "AND COALESCE(coord_approx,0)=0").fetchall()
+
+        def norm_area(city, area):
+            area = (area or "").strip()
+            if city and area.startswith(city + "-"):
+                area = area[len(city) + 1:]
+            return "" if area == (city or "") else area
+
+        d_pts = defaultdict(list)
+        c_pts = defaultdict(list)
+        for r in rows:
+            try:
+                lng, lat = float(r["lng"]), float(r["lat"])
+            except (TypeError, ValueError):
+                continue
+            key = (r["city_name"] or "", norm_area(r["city_name"], r["area_district"]))
+            if key[1]:
+                d_pts[key].append((lng, lat))
+            if key[0]:
+                c_pts[key[0]].append((lng, lat))
+
+        def med(pts):
+            lngs = sorted(p[0] for p in pts)
+            lats = sorted(p[1] for p in pts)
+            return lngs[len(lngs) // 2], lats[len(lats) // 2]
+
+        targets = c.execute(
+            "SELECT job_id, city_name, area_district FROM jobs "
+            "WHERE COALESCE(source,'boss')=? AND (lng IS NULL OR lng='' OR lat IS NULL OR lat='')",
+            (source or "liepin",)).fetchall()
+        n_d = n_c = 0
+        for t in targets:
+            key = (t["city_name"] or "", norm_area(t["city_name"], t["area_district"]))
+            if key in d_pts and d_pts[key]:
+                lng, lat = med(d_pts[key])
+                n_d += 1
+            elif key[0] in c_pts and c_pts[key[0]]:
+                lng, lat = med(c_pts[key[0]])
+                n_c += 1
+            else:
+                continue
+            c.execute("UPDATE jobs SET lng=?, lat=?, coord_approx=1 WHERE job_id=?",
+                      (f"{lng:.6f}", f"{lat:.6f}", t["job_id"]))
+        c.commit()
+        c.close()
+    return {"district": n_d, "city": n_c}
+
+
+def skill_gap(limit=18, source="", min_jobs=3):
+    """技能缺口：统计在招岗位里各技能出现频次，对比我的画像，给出「岗位要但我没有」的排序。
+
+    岗位技能文本 = 岗位名 + 技能标签 + 福利 + JD 正文，英文技能走词边界匹配（照搬 resume._has）。
+    """
+    import resume as resume_mod
+    prof = get_profile()
+    mine = {str(s).strip().lower() for s in (prof.get("skills") or []) if str(s).strip()}
+    src = (source or "").strip()
+    cond = " AND source=?" if src else ""
+    c = conn()
+    rows = c.execute(
+        "SELECT job_name, skills, welfare, detail_text FROM jobs WHERE status='active'" + cond,
+        ((src,) if src else ())).fetchall()
+    c.close()
+    total = len(rows)
+    if not total:
+        return {"total": 0, "have": [], "gap": [], "coverage": 0}
+    hits = {name: 0 for name, _al, _w in resume_mod.SKILL_DICT}
+    for r in rows:
+        hay = " ".join([str(r["job_name"] or ""), str(r["skills"] or ""),
+                        str(r["welfare"] or ""), str(r["detail_text"] or "")]).lower()
+        for name, aliases, _w in resume_mod.SKILL_DICT:
+            if any(resume_mod._has(a, hay) for a in aliases):
+                hits[name] += 1
+    have, gap = [], []
+    for name, _al, weight in resume_mod.SKILL_DICT:
+        n = hits[name]
+        if n < min_jobs:
+            continue
+        item = {"skill": name, "jobs": n,
+                "pct": round(n * 100.0 / total, 1), "weight": weight,
+                "mine": name.lower() in mine}
+        (have if item["mine"] else gap).append(item)
+    have.sort(key=lambda x: -x["jobs"])
+    gap.sort(key=lambda x: -x["jobs"])
+    covered = round(sum(1 for x in have) * 100.0 / max(1, len(have) + len(gap)), 1)
+    return {"total": total, "have": have[:limit], "gap": gap[:limit], "coverage": covered}
+
+
+def conversion(by="source", source="", limit=12):
+    """投递转化分析：按维度分组看 岗位数 / 已投 / 已回复 / 面试 / Offer 与转化率"""
+    dims = {
+        "source": "COALESCE(source,'boss')",
+        "scale": "CASE WHEN COALESCE(scale,'')='' THEN '未知' ELSE scale END",
+        "keyword": "CASE WHEN COALESCE(keyword,'')='' THEN '未知' ELSE keyword END",
+        "city": "CASE WHEN COALESCE(city_name,'')='' THEN '未知' ELSE city_name END",
+        "degree": "CASE WHEN COALESCE(degree,'')='' THEN '未知' ELSE degree END",
+    }
+    col = dims.get(by) or dims["source"]
+    src = (source or "").strip()
+    cond = " AND source=?" if src else ""
+    c = conn()
+    rows = c.execute(
+        f"SELECT {col} AS label, COUNT(*) total, "
+        "SUM(CASE WHEN applied=1 THEN 1 ELSE 0 END) applied, "
+        "SUM(CASE WHEN replied=1 THEN 1 ELSE 0 END) replied, "
+        "SUM(CASE WHEN stage='interview' THEN 1 ELSE 0 END) interview, "
+        "SUM(CASE WHEN stage='offer' THEN 1 ELSE 0 END) offered, "
+        "SUM(CASE WHEN stage='rejected' THEN 1 ELSE 0 END) rejected "
+        f"FROM jobs WHERE 1=1{cond} GROUP BY label ORDER BY total DESC LIMIT ?",
+        (((src,) if src else ()) + (limit,))).fetchall()
+    c.close()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["reply_rate"] = round((d["replied"] or 0) * 100.0 / d["applied"], 1) if d["applied"] else 0
+        d["interview_rate"] = round((d["interview"] or 0) * 100.0 / d["replied"], 1) if d["replied"] else 0
+        out.append(d)
+    return {"by": by, "rows": out}
+
+
+def schedule(days=14, include_past=False):
+    """跟进日程：next_at 在 [今天, 今天+days] 内的岗位（面试/沟通时间）"""
+    from datetime import date, timedelta
+    today = date.today()
+    start = today.isoformat() if not include_past else "1970-01-01"
+    end = (today + timedelta(days=max(1, days))).isoformat()
+    c = conn()
+    _migrate(c)      # next_at 是新列，老库首次用到时补上
+    rows = c.execute(
+        "SELECT job_id, job_name, company, city_name, salary, COALESCE(source,'boss') source, "
+        "next_at, next_note, stage, status, job_url, boss_name, applied "
+        "FROM jobs WHERE COALESCE(next_at,'')<>'' AND substr(next_at,1,10) BETWEEN ? AND ? "
+        "ORDER BY next_at ASC LIMIT 200", (start, end)).fetchall()
+    c.close()
+    return [dict(r) for r in rows]
+
+
+def set_next_at(job_id, at, note=""):
+    """设置跟进时间（空字符串=清除）"""
+    with _lock:
+        c = conn()
+        _migrate(c)
+        cur = c.execute("UPDATE jobs SET next_at=?, next_note=? WHERE job_id=?",
+                        ((at or "").strip(), (note or "").strip()[:200], job_id))
+        c.commit()
+        c.close()
+    return cur.rowcount
+
+
+def bulk_update(job_ids, action, value=None):
+    """批量改状态：star=1/0、stage=interview/offer/rejected/''、replied=1/0"""
+    ids = [i for i in (job_ids or []) if i]
+    if not ids:
+        return 0
+    fields = {"star": "starred", "stage": "stage", "replied": "replied"}
+    col = fields.get(action)
+    if not col:
+        return 0
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ph = ",".join("?" * len(ids))
+    with _lock:
+        c = conn()
+        _migrate(c)
+        if action == "stage":
+            v = (value or "").strip().lower()
+            if v and v not in STAGES:
+                c.close()
+                return 0
+            cur = c.execute(f"UPDATE jobs SET {col}=?, stage_at=? WHERE job_id IN ({ph})",
+                            [v, now] + ids)
+        elif action == "replied":
+            cur = c.execute(f"UPDATE jobs SET {col}=?, reply_at=? WHERE job_id IN ({ph})",
+                            [1 if str(value) in ("1", "true", "True") else 0, now] + ids)
+        else:
+            cur = c.execute(f"UPDATE jobs SET {col}=? WHERE job_id IN ({ph})",
+                            [1 if str(value) in ("1", "true", "True") else 0] + ids)
+        c.commit()
+        n = cur.rowcount
+        c.close()
+    return n
+
+
+def backup(keep=7):
+    """把当前库备份到 data/backup/，只保留最近 keep 份（防误删/写坏）。
+
+    用 sqlite3 的在线备份 API 而不是直接复制文件，避免刚好在写入时拷到半个库。
+    """
+    src = DB_PATH
+    if not os.path.exists(src):
+        return ""
+    bdir = os.path.join(DATA_DIR, "backup")
+    os.makedirs(bdir, exist_ok=True)
+    dst = os.path.join(bdir, f"jobs_{datetime.now():%Y%m%d_%H%M%S}.db")
+    try:
+        s = sqlite3.connect(src, timeout=30)
+        d = sqlite3.connect(dst)
+        with d:
+            s.backup(d)
+        d.close()
+        s.close()
+    except Exception:
+        try:
+            os.path.exists(dst) and os.remove(dst)
+        except OSError:
+            pass
+        return ""
+    files = sorted(f for f in os.listdir(bdir) if f.startswith("jobs_") and f.endswith(".db"))
+    for f in files[:-keep]:
+        try:
+            os.remove(os.path.join(bdir, f))
+        except OSError:
+            pass
+    return dst
 
 
 def get_applications(limit=50, batch_id=None):
