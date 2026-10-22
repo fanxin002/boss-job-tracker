@@ -32,14 +32,32 @@ PAGE_DELAY = (5, 11)          # 接口调用间隔（秒）
 DAILY_QUOTA = 60              # 每日搜索请求预算（一次翻页 = 1 次）
 MAX_PAGES_CAP = 10            # 猎聘接口硬上限 400 条/组合
 
-# BOSS 配置里的中文城市名 → 猎聘 dqCode。
-# 带 * 的是公开资料/探针实测验证过的；未知城市会跳过并在日志提示补码。
-CITY_CODE = {
+# 兜底城市码（同步失败/首次使用前的本地内置表）。完整城市码由 sync_cities()
+# 从猎聘 get-all-dq 接口拉取落盘 data/liepin_cities.json，与 BOSS 的 cities.json 对等。
+_CITY_FALLBACK = {
     "厦门": "090040", "泉州": "090030", "福州": "090020",   # 探针实测 dqCode
     "北京": "010", "上海": "020", "天津": "030",
     "广州": "050020", "深圳": "050090", "南京": "060020", "杭州": "070020",
     "合肥": "080020", "成都": "280020",
 }
+CITY_FILE = os.path.join(db.DATA_DIR, "liepin_cities.json")
+
+
+def _load_city_code():
+    """城市码表：优先读本地缓存（同步过就用它），否则退回内置兜底表。"""
+    try:
+        with open(CITY_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        m = data.get("map") or {}
+        if m:
+            return m
+    except Exception:
+        pass
+    return dict(_CITY_FALLBACK)
+
+
+# 模块级城市码表（每次调用 run_crawl 前由 _load_city_code 刷新，见 run_crawl 开头）
+CITY_CODE = _load_city_code()
 
 # 页面上下文里调搜索接口（POST + JSON body，同源自动携带 WAF cookie）。
 # 必需请求头（实测缺失时 flag!=1 被拦）：X-Client-Type / X-Fscp-Version /
@@ -70,6 +88,84 @@ def build_body(kw, dq, page_no):
             "industry": "", "salary": "", "jobKind": "",
             "compScale": "", "compKind": "", "compStage": "", "eduLevel": ""},
         "passThroughForm": {"scene": "init", "skeyword": kw, "sfrom": "search_job_pc"}}}
+
+
+# 猎聘全量城市码接口（antd-city 组件同款）：part_1 = 地级市/直辖市（搜索用），
+# part_2 = 区县，province = 省级，country = 国外。与 BOSS 的 city.json 对等。
+GET_DQ_URL = ("https://api-dok.liepin.com/api/com.liepin.bd.p.v4.get-all-dq"
+              "?part=part_1,part_2,country,province&sc=0&from=component")
+GET_DQ_JS = r"""
+var url=arguments[0];
+return fetch(url,{method:'GET',credentials:'include',
+  headers:{'X-Requested-With':'XMLHttpRequest','X-Client-Type':'web',
+    'X-Fscp-Version':'1.1','X-Fscp-Std-Info':JSON.stringify({client_id:'40108'}),
+    'X-Fscp-Trace-Id':'w'+Date.now()+Math.floor(Math.random()*1e6),
+    'Referer':'https://www.liepin.com/zhaopin/'}
+}).then(function(r){return r.text();}).catch(function(e){return 'FETCHERR '+e;});
+"""
+
+
+def sync_cities():
+    """从猎聘 get-all-dq 拉全量城市码落盘 data/liepin_cities.json。
+    返回 (ok, 城市数/错误信息)。与 BOSS crawler.sync_cities() 对等。"""
+    page = None
+    try:
+        page = _ensure_liepin_browser(offscreen=True)
+        page.get("https://www.liepin.com/zhaopin/")
+        time.sleep(6)
+        txt = page.run_js(GET_DQ_JS, GET_DQ_URL)
+        if not txt or str(txt).startswith("FETCHERR"):
+            return False, f"接口请求失败：{(txt or '')[:80]}"
+        body = json.loads(txt)
+        if body.get("flag") != 1:
+            return False, f"接口返回 flag={body.get('flag')} code={body.get('code')} {body.get('msg') or ''}"
+        data = body.get("data") or {}
+        part1 = (data.get("part_1") or {}).get("list") or {}
+        # 只取中国城市：a=="0"（中国）。层级过滤：
+        #   ca==3 → 地级市/自治州/地区（搜索城市码，厦门/泉州/福州…）
+        #   ca==2 且 l==3 → 直辖市（北京/上海/天津/重庆）
+        #   ca==2 其余（l==4/5 省级）→ 排除，省名不是搜索城市码
+        city_map = {}
+        for code, obj in part1.items():
+            if str(obj.get("a")) != "0":
+                continue
+            name = (obj.get("n") or "").strip()
+            if not name or not code:
+                continue
+            ca = int(obj.get("ca") or 0)
+            lv = obj.get("l")
+            if ca == 3:
+                city_map[name] = code
+            elif ca == 2 and str(lv) == "3":
+                city_map[name] = code
+        payload = {
+            "synced_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "count": len(city_map),
+            "map": city_map,
+        }
+        with open(CITY_FILE, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
+        global CITY_CODE
+        CITY_CODE = city_map
+        return True, len(city_map)
+    except Exception as e:
+        return False, str(e)
+    finally:
+        if page is not None:
+            try:
+                crawler._close_browser(slot="liepin")
+            except Exception:
+                pass
+
+
+def load_cities():
+    """读本地城市码缓存；没有则返回内置兜底表"""
+    try:
+        with open(CITY_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        return data.get("map") or {}, data.get("synced_at") or ""
+    except Exception:
+        return dict(_CITY_FALLBACK), ""
 
 
 def cookies_logged(page) -> bool:
@@ -224,6 +320,10 @@ def run_crawl(run_id, keywords, cities, pages, headless=False, offscreen=True, p
     fetched = new_cnt = offline_cnt = 0
     tot = max(1, len(keywords) * len(cities) * max(1, int(pages or 1)))
     done = {"n": 0}
+
+    # 每次抓取前刷新城市码表（用户可能刚同步过猎聘城市库）
+    global CITY_CODE
+    CITY_CODE = _load_city_code()
 
     def _p(note=""):
         if not progress:
