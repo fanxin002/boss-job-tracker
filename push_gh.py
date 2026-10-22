@@ -6,8 +6,8 @@ TOKEN = os.environ.get("GH_TOKEN", "")
 OWNER, REPO, BRANCH = "fanxin002", "boss-job-tracker", "main"
 API = f"https://api.github.com/repos/{OWNER}/{REPO}/contents"
 ROOT = os.path.dirname(os.path.abspath(__file__))
-FILES = ["README.md", "app.py", "crawler.py", "e2e_test.py", "liepin.py", "static/index.html"]
-MSG = "feat: crawl progress bar + strict cookie-based login check (wt2) to stop false 'logged in' state"
+FILES = ["README.md", "static/index.html", "push_gh.py"]
+MSG = "fix: progress modal is re-openable via floating pill; log dialog above progress (z-index)"
 
 
 def req(url, data=None, method=None):
