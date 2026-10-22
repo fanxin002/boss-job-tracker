@@ -213,16 +213,22 @@
   .pager{display:flex;justify-content:space-between;align-items:center;margin-top:20px;font-size:12px;color:var(--muted)}
   .empty{padding:56px;text-align:center;color:var(--muted-soft);font-size:13px}
   table.jobs th:nth-child(1),table.jobs td:nth-child(1){width:34px}
-  table.jobs th:nth-child(2),table.jobs td:nth-child(2){min-width:180px}
-  table.jobs th:nth-child(3),table.jobs td:nth-child(3){width:88px}
-  table.jobs th:nth-child(4),table.jobs td:nth-child(4){width:52px;text-align:center}
-  table.jobs th:nth-child(5),table.jobs td:nth-child(5){width:118px}
-  table.jobs th:nth-child(6),table.jobs td:nth-child(6){width:126px}
-  table.jobs th:nth-child(7),table.jobs td:nth-child(7){width:96px}
-  table.jobs th:nth-child(8),table.jobs td:nth-child(8){width:142px}
-  table.jobs th:nth-child(9),table.jobs td:nth-child(9){width:82px}
-  table.jobs th:nth-child(10),table.jobs td:nth-child(10){width:62px;white-space:nowrap}
-  table.jobs th:nth-child(11),table.jobs td:nth-child(11){width:92px;text-align:center;white-space:nowrap}
+  table.jobs th:nth-child(2),table.jobs td:nth-child(2){width:48px;text-align:center}
+  table.jobs th:nth-child(3),table.jobs td:nth-child(3){min-width:180px}
+  table.jobs th:nth-child(4),table.jobs td:nth-child(4){width:88px}
+  table.jobs th:nth-child(5),table.jobs td:nth-child(5){width:52px;text-align:center}
+  table.jobs th:nth-child(6),table.jobs td:nth-child(6){width:118px}
+  table.jobs th:nth-child(7),table.jobs td:nth-child(7){width:126px}
+  table.jobs th:nth-child(8),table.jobs td:nth-child(8){width:96px}
+  table.jobs th:nth-child(9),table.jobs td:nth-child(9){width:142px}
+  table.jobs th:nth-child(10),table.jobs td:nth-child(10){width:82px}
+  table.jobs th:nth-child(11),table.jobs td:nth-child(11){width:62px;white-space:nowrap}
+  table.jobs th:nth-child(12),table.jobs td:nth-child(12){width:92px;text-align:center;white-space:nowrap}
+  /* 平台图标列：图片形式，不占文字 */
+  .platicon{width:18px;height:18px;border-radius:5px;display:inline-block;vertical-align:-4px;
+    box-shadow:0 1px 2px rgba(0,0,0,.14)}
+  td.plat,th.plat{text-align:center}
+  .platicon.lg{width:20px;height:20px;border-radius:6px;vertical-align:-5px;margin-right:5px}
   .star{cursor:pointer;font-size:15px;line-height:1;color:#d4d4d8;background:none;border:none;padding:0 6px;height:auto}
   .star.on{color:#e6b800}
   .score{display:inline-block;min-width:26px;text-align:center;font-size:11px;font-weight:700;color:#111;
@@ -447,6 +453,7 @@
         <div style="overflow-x:auto">
           <table class="jobs">
             <thead><tr><th><input type="checkbox" id="chkAll" onchange="toggleAll(this)"></th>
+              <th class="plat" title="岗位来源平台">平台</th>
               <th class="sortable" data-col="company" title="点击按公司名排序" onclick="sortByCol('company')">岗位</th>
               <th class="sortable" data-col="salary" title="点击按薪资排序" onclick="sortByCol('salary')">薪资</th>
               <th class="sortable" data-col="match" title="点击按匹配度排序（再点一次反向）" onclick="sortByCol('match')">匹配</th>
@@ -1312,11 +1319,9 @@ async function loadReplies(){
     const score=r.match_score||0;
     const cls=score>=60?'tag-sal':(score>=40?'':'');
     const isLp=r.source==='liepin';
-    const platTag=isLp
-      ?'<span class="tag" style="background:#fff3e6;color:#b45309;border-color:#f6d9b8">猎聘</span>'
-      :'<span class="tag">BOSS</span>';
+    const platTag=platIcon(r.source,'lg');
     return `<tr>
-      <td><b>${esc(r.company||'')}</b> ${platTag}<div class="muted">${esc(r.city_name||'')}${r.area_district?' '+esc(r.area_district):''}</div></td>
+      <td>${platTag}<b>${esc(r.company||'')}</b><div class="muted">${esc(r.city_name||'')}${r.area_district?' '+esc(r.area_district):''}</div></td>
       <td><a href="${esc(r.job_url||'#')}" target="_blank">${esc(r.job_name||'')}</a></td>
       <td>${r.salary?`<span class="tag tag-sal">${esc(r.salary)}</span>`:'<span class="muted">未知</span>'}</td>
       <td><span class="tag ${cls}" title="基于简历画像">${score}</span></td>
@@ -1414,6 +1419,23 @@ async function refreshFilters(){
   fill('fDegree',f.degrees||[]);fill('fExp',f.experiences||[]);fill('fScale',f.scales||[]);
 }
 
+/* ========== 平台图标（内联 SVG 生成的图片，离线可用、不经外网） ========== */
+const PLAT_META={
+  boss:{name:'BOSS直聘',bg:'#00BEBD',ch:'B'},
+  liepin:{name:'猎聘',bg:'#FF6A00',ch:'猎'}
+};
+function platIcon(p,cls){
+  const m=PLAT_META[(p||'boss')==='liepin'?'liepin':'boss'];
+  const svg="<svg xmlns='http://www.w3.org/2000/svg' width='40' height='40'>"
+    +"<rect width='40' height='40' rx='10' fill='"+m.bg+"'/>"
+    +"<text x='20' y='27' text-anchor='middle' font-family='PingFang SC,Microsoft YaHei,Arial,sans-serif'"
+    +" font-size='"+(m.ch.length>1?19:21)+"' font-weight='700' fill='#fff'>"+m.ch+"</text></svg>";
+  // 单引号必须转义：SVG 属性用的就是单引号，留着会截断 src='...'
+  const uri=encodeURIComponent(svg).replace(/'/g,'%27');
+  return "<img class='platicon "+(cls||"")+"' alt='"+m.name+"' title='"+m.name+"'"
+    +" src='data:image/svg+xml;charset=utf-8,"+uri+"'>";
+}
+
 /* ========== 列表 ========== */
 function _daysSince(ts){
   if(!ts)return 0;
@@ -1433,7 +1455,6 @@ async function loadJobs(p){
     if(j.degree)tags.push(`<span class="muted">${esc(j.degree)}</span>`);
     if(j.skills)tags.push(`<span class="muted">${esc(j.skills.split(',').slice(0,2).join(' / '))}</span>`);
     let st='';
-    if((j.source||'boss')==='liepin')st+='<span class="tag" style="background:#fff7e6;border-color:#ffd591;color:#d46b08" title="来自猎聘">猎聘</span>';
     if(j.status==='offline')st+='<span class="tag tag-off">已下线</span>';
     if(j.is_new)st+='<span class="tag tag-new">新增</span>';
     const STG={interview:['tag-stage-itv','面试中'],offer:['tag-stage-offer','Offer'],rejected:['tag-stage-rej','未通过']};
@@ -1462,6 +1483,7 @@ async function loadJobs(p){
           :`<button class="btn btn-sm" onclick="applyOne('${esc(j.job_id)}')">投递</button>`));
     return `<tr class="${sel.has(j.job_id)?'sel':''}">
       <td><input type="checkbox" data-jid="${esc(j.job_id)}" ${sel.has(j.job_id)?'checked':''} ${j.status==='offline'||isLp?'disabled':''} onchange="toggleSel(this)"></td>
+      <td class="plat">${platIcon(j.source)}</td>
       <td><a href="${esc(j.job_url)}" target="_blank">${esc(j.job_name)}</a> ${dup}<div class="muted">${esc(j.keyword||'')}${j.industry?' / '+esc(j.industry):''}</div></td>
       <td>${j.salary?`<span class="tag tag-sal">${esc(j.salary)}</span>`:'<span class="muted">未知</span>'}</td>
       <td><span class="score ${score>=70?'hi':''}" title="本地规则打分：技能命中 / 薪资 / 学历">${score}</span></td>
@@ -1472,7 +1494,7 @@ async function loadJobs(p){
       <td>${st||'<span class="tag">在招</span>'}</td>
       <td class="muted">${esc((j.first_seen||'').slice(5,10))}</td>
       <td style="text-align:center">${act}</td>
-    </tr>`}).join('')||'<tr><td colspan="11" class="empty">暂无数据</td></tr>';
+    </tr>`}).join('')||'<tr><td colspan="12" class="empty">暂无数据</td></tr>';
   document.getElementById('pageInfo').textContent=`第 ${curPage} / ${Math.max(1,Math.ceil(d.total/ps))} 页`;
   document.getElementById('prevBtn').disabled=curPage<=1;
   document.getElementById('nextBtn').disabled=curPage*ps>=d.total;
@@ -1515,6 +1537,7 @@ async function openJob(jid){
   curJobId=jid;
   document.getElementById('jobTitle').textContent=j.job_name||'无标题';
   document.getElementById('jobMeta').innerHTML=[
+    `${platIcon(j.source,'lg')}<span class="muted">${(j.source||'boss')==='liepin'?'猎聘':'BOSS直聘'}</span>`,
     j.salary?`<span class="tag tag-sal">${esc(j.salary)}</span>`:'<span class="muted">薪资未知</span>',
     esc(j.company||''),esc((j.city_name||'')+(j.area_district?' '+j.area_district:'')),
     j.lng?`<a class="maplink" onclick="openMap('${esc(j.job_id)}')">📍 公司位置</a>`:'',
