@@ -905,6 +905,12 @@ def main():
     _, _dzrows = db.query_jobs({"dedupe": "1", "page": 1, "size": 300})
     _dz = [r for r in _dzrows if r["job_id"] in ("DZ1", "DZ2")]
     check("去重-跨写法同岗合并为1条", len(_dz) == 1 and _dz[0].get("dup_count") == 2, str(len(_dz)))
+    # 猎聘「某…」脱敏公司名：真实雇主不同，不能按公司名合并
+    check("去重-脱敏公司名不互相合并",
+          db.dedupe_key("某大型新零售公司", "数据分析专家", "lpA")
+          != db.dedupe_key("某大型新零售公司", "数据分析专家", "lpB"))
+    check("去重-脱敏名不参与公司维度", db.dedupe_key("某知名公司", "数据分析", "lpC") == "secret|lpC")
+    check("去重-识别脱敏名", db.is_masked_company("某厦门新能源公司") and not db.is_masked_company("安踏集团"))
 
     gp = client.get("/api/skills/gap").json()
     check("技能缺口-接口结构", gp["total"] >= 1 and "gap" in gp and "have" in gp, str(gp.get("total")))
