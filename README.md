@@ -9,7 +9,7 @@
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
 ![SQLite](https://img.shields.io/badge/SQLite-%E6%9C%AC%E5%9C%B0%E5%AD%98%E5%82%A8-003B57?logo=sqlite&logoColor=white)
-![Tests](https://img.shields.io/badge/e2e-214%2F214-brightgreen)
+![Tests](https://img.shields.io/badge/e2e-217%2F217-brightgreen)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
 
 
@@ -89,7 +89,7 @@ boss-job-tracker/
 ├── salary.py           # 薪资文本 → 数值解析
 ├── resume.py           # 简历解析 + 技能词典 + 匹配分计算
 ├── push.py             # PushPlus 微信推送
-├── e2e_test.py         # 214 项端到端回归测试（离线，monkeypatch 模拟浏览器）
+├── e2e_test.py         # 217 项端到端回归测试（离线，monkeypatch 模拟浏览器）
 ├── selftest.py         # 轻量自检
 ├── start.bat           # Windows 一键启动
 ├── requirements.txt
@@ -112,6 +112,7 @@ boss-job-tracker/
 | 方法+路径 | 用途 |
 |---|---|
 | `GET /api/jobs` | 岗位列表（keyword/city_code/status/applied/degree/experience/scale/industry/salary_min/salary_max/no_salary/has_detail/starred/replied/overdue/dedupe/q/sort/page/size） |
+| `GET /api/job` | 单条岗位详情（详情面板用；不再要求岗位必须在当前页，翻到第 8 页也能打开） |
 | `GET /api/counts` | 各筛选口径计数（含投递超期数） |
 | `GET /api/stats` | 看板聚合（趋势/分布/地图点位统计），`?source=boss/liepin` 按平台筛选，并返回各平台条数 |
 | `GET /api/map` | 地图点位（≤1500，含坐标/薪资/HR 字段，热力权重用），`?source=` 按平台筛选并返回 `no_coord` 缺坐标条数 |
@@ -139,7 +140,7 @@ boss-job-tracker/
 
 ```bash
 python e2e_test.py
-# ===== 214/214 PASSED =====
+# ===== 217/217 PASSED =====
 ```
 
 离线回归：monkeypatch 模拟浏览器与接口返回，覆盖入库/去重/薪资空值保护/筛选/排序/超期口径/匹配分/投递状态机/风控熔断/预算/地图/看板聚合/**平台隔离与平台筛选**等。
