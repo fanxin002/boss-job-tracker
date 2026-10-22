@@ -671,7 +671,7 @@
         <label>关键词（英文逗号分隔）</label>
         <input type="text" id="cfgKeywords" placeholder="数据分析,数据分析师,BI工程师">
 
-        <label>城市 <span style="float:right"><button class="linkbtn" onclick="syncCities()">同步 BOSS 城市库</button></span></label>
+        <label>城市 <span style="float:right"><button class="linkbtn" onclick="syncCities()">同步 BOSS 城市库</button> <button class="linkbtn" onclick="syncLpCities()">同步猎聘城市码</button></span></label>
         <div class="picker" id="cityPicker">
           <div class="box" id="cityBox" onclick="focusCity()">
             <div id="cityTags" style="display:flex;gap:8px;flex-wrap:wrap"></div>
@@ -990,6 +990,15 @@ async function syncCities(){
     const s=await(await fetch('/api/cities/sync_state')).json();
     document.getElementById('cityHint').textContent=s.running?'同步中…':(s.last||'');
     if(!s.running){clearInterval(t);if(s.count){await loadCities();toast('城市库已更新，共 '+s.count+' 个')}}
+  },1200);
+}
+async function syncLpCities(){
+  const r=await(await fetch('/api/liepin_cities/sync',{method:'POST'})).json();
+  toast(r.msg);if(!r.ok)return;
+  const t=setInterval(async()=>{
+    const s=await(await fetch('/api/liepin_cities/sync_state')).json();
+    if(!s.running){clearInterval(t);await loadLpCities();renderCityTags();
+      toast(s.count?('猎聘城市码已更新，共 '+s.count+' 个'):(s.last||'猎聘城市码同步完成'))}
   },1200);
 }
 
