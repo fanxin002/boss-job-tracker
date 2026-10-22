@@ -806,6 +806,9 @@ def main():
           and _lprows[0]["boss_title"] == "招聘经理")
     check("平台-城市码表", lpmod.CITY_CODE.get("厦门") == "090040"
           and lpmod.CITY_CODE.get("泉州") == "090030")
+    # 城市码兜底表：同步失败/首次使用也能映射福建核心城
+    check("平台-城市码兜底含福建核心城", lpmod._CITY_FALLBACK.get("厦门") == "090040"
+          and lpmod._CITY_FALLBACK.get("福州") == "090020")
     _body = lpmod.build_body("数据分析", "090040", 2)
     check("平台-请求体currentPage从0起", _body["data"]["mainSearchPcConditionForm"]["currentPage"] == 1
           and _body["data"]["mainSearchPcConditionForm"]["dq"] == "090040")
@@ -974,7 +977,8 @@ def main():
     check("备份-生成文件", _bk_ok, str(_bp.get("path", ""))[-30:])
 
     _lc = client.get("/api/liepin_cities").json()
-    check("猎聘-城市码列表", "厦门" in _lc["cities"] and len(_lc["cities"]) >= 10)
+    check("猎聘-城市码列表", "厦门" in _lc["cities"] and len(_lc["cities"]) >= 10
+          and "count" in _lc and "synced_at" in _lc)
 
     # 猎聘无坐标 → 用同城同区 BOSS 坐标补近似点
     db.upsert_jobs([{**mk("LPAPX"), "job_id": "lpAPX", "source": "liepin", "lng": "", "lat": ""}], rid3)
