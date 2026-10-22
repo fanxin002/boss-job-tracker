@@ -946,6 +946,35 @@ def main():
     check("技能缺口-只统计达到阈值的技能", all(x["jobs"] >= 3 for x in gp["gap"]))
     check("技能缺口-带平台筛选", client.get("/api/skills/gap?source=boss").json()["total"] >= 1)
 
+    # ---- 技能薪资分析：构造「带 Flink 的高薪组 vs 不带的低薪组」验证溢价/偏好度 ----
+    def _mk_ss(jid, salary, skills, kw="数据分析", cc="101230200"):
+        return {**mk(jid, salary), "skills": skills, "keyword": kw, "city_code": cc,
+                "detail_text": "", "welfare": "五险一金"}
+    _ss_rows = []
+    # 高薪组：8 条 20-25K，都带 Flink
+    for i in range(8):
+        _ss_rows.append(_mk_ss(f"SF{i}", "20-25K", "Flink|Kafka"))
+    # 低薪组：12 条 6-8K，都不带 Flink
+    for i in range(12):
+        _ss_rows.append(_mk_ss(f"SB{i}", "6-8K", "Excel"))
+    db.upsert_jobs(_ss_rows, rid2)
+    _ss = client.get("/api/skills/salary").json()
+    check("技能薪资-接口结构", _ss["total"] >= 1 and "skills" in _ss
+          and _ss["median_salary"] is not None and _ss["high_threshold"] is not None,
+          f'total={_ss.get("total")}')
+    _flink = next((x for x in _ss["skills"] if x["skill"] == "Flink"), None)
+    check("技能薪资-Flink 溢价为正", _flink is not None and _flink["premium"] > 0
+          and _flink["salary"] > _flink["base"],
+          f'flink={_flink}')
+    check("技能薪资-Flink 高薪偏好度大于1", _flink is not None and _flink["lift"] > 1
+          and _flink["high_rate"] == 100.0,
+          f'lift={_flink and _flink["lift"]} high_rate={_flink and _flink["high_rate"]}')
+    _excel = next((x for x in _ss["skills"] if x["skill"] == "Excel"), None)
+    check("技能薪资-低薪组技能溢价为负", _excel is not None and _excel["premium"] < 0,
+          f'excel={_excel}')
+    check("技能薪资-min_jobs 过滤生效", all(x["jobs"] >= 5 for x in _ss["skills"]))
+    check("技能薪资-平台筛选可用", client.get("/api/skills/salary?source=boss").json()["total"] >= 1)
+
     cv = client.get("/api/conversion?by=source").json()
     check("转化-按平台分组", cv["by"] == "source" and len(cv["rows"]) >= 1, str(cv.get("rows"))[:60])
     check("转化-支持其他维度", client.get("/api/conversion?by=keyword").json()["by"] == "keyword")
