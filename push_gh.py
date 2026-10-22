@@ -7,7 +7,7 @@ OWNER, REPO, BRANCH = "fanxin002", "boss-job-tracker", "main"
 API = f"https://api.github.com/repos/{OWNER}/{REPO}/contents"
 ROOT = os.path.dirname(os.path.abspath(__file__))
 FILES = ["README.md", "app.py", "db.py", "e2e_test.py", "static/index.html"]
-MSG = "feat: unify BOSS+Liepin crawl entry and config (platform switches, one-click sequential crawl)"
+MSG = "feat: platform-aware login status, dashboard/map platform filter, fixed match score recompute"
 
 
 def req(url, data=None, method=None):
