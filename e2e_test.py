@@ -93,8 +93,8 @@ def main():
     check("增量-旧岗位取消新增标记", rowA["is_new"] == 0)
     check("增量-旧岗位last_run更新", rowA["last_run_id"] == rid2)
 
-    # ---- 5. 下线检测 ----
-    off = db.mark_offline([("数据分析", "101230200")], set(ids2))
+    # ---- 5. 下线检测（min_miss=1：旧语义，单轮未出现即下线）----
+    off = db.mark_offline([("数据分析", "101230200")], set(ids2), min_miss=1)
     c = db.conn()
     rowC = c.execute("SELECT status FROM jobs WHERE job_id='C'").fetchone()
     rowD = c.execute("SELECT status,is_new FROM jobs WHERE job_id='D'").fetchone()
@@ -993,6 +993,45 @@ def main():
     check("猎聘-详情解析区县/福利", _pd["area"] == "厦门-思明区" and _pd["welfare"] == "五险一金")
     check("补抓-只有猎聘时不需要 BOSS 登录",
           _appm._pending_has_boss([], {"source": "liepin"}) is False)
+
+    # ---- 下线防误杀：连续未出现阈值 + 覆盖率闸门 + 误杀撤销 ----
+    _KW, _CC = "防误杀", "999999"
+    def _mkx(jid):
+        return {**mk(jid), "keyword": _KW, "city_code": _CC, "city_name": "测试城"}
+    _rid_x = db.create_run(_KW, "测试城", 1, "test")
+    db.upsert_jobs([_mkx("X1"), _mkx("X2"), _mkx("X3"), _mkx("X4"), _mkx("X5")], _rid_x)
+    # 第 1 轮只重新命中 3/5（60%，刚好过闸）：X4/X5 miss_count=1，不应下线
+    _o1 = db.mark_offline([(_KW, _CC)], {"X1", "X2", "X3"})
+    check("防误杀-单轮未出现不下线",
+          _o1 == 0 and db.get_job("X4")["status"] == "active"
+          and db.get_job("X4")["miss_count"] == 1, f"off={_o1}")
+    # 第 2 轮依然没出现 → 累计 2 次，才判下线
+    _o2 = db.mark_offline([(_KW, _CC)], {"X1", "X2", "X3"})
+    check("防误杀-连续两轮未出现才下线",
+          _o2 == 2 and db.get_job("X4")["status"] == "offline"
+          and db.get_job("X5")["status"] == "offline", f"off={_o2}")
+    # 重新出现 → 复活且计数清零
+    db.upsert_jobs([_mkx("X4")], _rid_x)
+    check("防误杀-重新出现即复活", db.get_job("X4")["status"] == "active"
+          and db.get_job("X4")["miss_count"] == 0)
+    # 覆盖率闸门：5 条活跃只重新命中 2 条（40% < 60%）→ 整段跳过，一条都不判下线
+    _o3 = db.mark_offline([(_KW, _CC)], {"X1", "X2"}, min_miss=1)
+    check("防误杀-覆盖率不足跳过判定",
+          _o3 == 0 and db.get_job("X3")["status"] == "active"
+          and db.get_job("X5")["status"] == "offline", f"off={_o3}")
+    # 撤销：最近 24h 内判的下线可一键回滚
+    _rc = db.recover_offline(hours=24)
+    check("防误杀-误杀可撤销", _rc >= 1 and db.get_job("X5")["status"] == "active"
+          and db.get_job("X5")["miss_count"] == 0, f"recovered={_rc}")
+    # 旧数据没有 offline_at（加列前判的下线）→ hours=0 整体撤销
+    _cl3 = db.conn()
+    _cl3.execute("UPDATE jobs SET status='offline', offline_at=NULL WHERE job_id='X1'")
+    _cl3.commit(); _cl3.close()
+    _rc0 = db.recover_offline(hours=0)
+    check("防误杀-无时间戳旧下线可整体撤销",
+          _rc0 >= 1 and db.get_job("X1")["status"] == "active", f"recovered={_rc0}")
+    _cl2 = db.conn(); _cl2.execute("DELETE FROM jobs WHERE city_code='999999'")
+    _cl2.commit(); _cl2.close()
 
     # 清理：删猎聘测试行，恢复猎聘风控/预算为干净态
     _cl = db.conn(); _cl.execute("DELETE FROM jobs WHERE source='liepin'"); _cl.commit(); _cl.close()
