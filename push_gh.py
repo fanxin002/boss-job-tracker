@@ -6,9 +6,8 @@ TOKEN = os.environ.get("GH_TOKEN", "")
 OWNER, REPO, BRANCH = "fanxin002", "boss-job-tracker", "main"
 API = f"https://api.github.com/repos/{OWNER}/{REPO}/contents"
 ROOT = os.path.dirname(os.path.abspath(__file__))
-FILES = ["README.md", "static/index.html", "app.py", "db.py",
-         "e2e_test.py", "push_gh.py"]
-MSG = "feat: skill-salary analysis - which skills matter in high-paying jobs (demand/premium/lift)"
+FILES = ["README.md", "app.py", "crawler.py", "e2e_test.py", "push_gh.py"]
+MSG = "fix: stop wiping BOSS login cookie - merge save_cookies, no save when logged-out, additive inject"
 
 
 def req(url, data=None, method=None):
