@@ -718,6 +718,42 @@ def _pending_has_boss(job_ids, filters):
 
 # ---------- 城市库 ----------
 _city_state = {"running": False, "last": ""}
+_lp_city_state = {"running": False, "last": ""}
+
+
+@app.get("/api/liepin_cities")
+def api_liepin_cities():
+    """猎聘支持的城市（配置页用来标注哪些城市能抓猎聘）"""
+    m, at = liepin.load_cities()
+    return {"cities": sorted(m.keys()), "count": len(m), "synced_at": at,
+            "syncing": _lp_city_state["running"]}
+
+
+@app.post("/api/liepin_cities/sync")
+def api_liepin_cities_sync():
+    """从猎聘接口拉全量城市码（与 BOSS 城市库同步对等）"""
+    if _lp_city_state["running"]:
+        return {"ok": True, "msg": "正在同步中，请稍候…"}
+    if _state["running"] or _detail_state["running"] or _apply_state["running"]:
+        return {"ok": False, "msg": "有任务在跑（获取/补抓/投递），请等它结束再同步城市"}
+
+    def _run():
+        _lp_city_state["running"] = True
+        try:
+            ok, info = liepin.sync_cities()
+            _lp_city_state["last"] = f"成功同步 {info} 个城市" if ok else f"同步失败：{info}"
+        finally:
+            _lp_city_state["running"] = False
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"ok": True, "msg": "已开始同步猎聘城市库（几秒钟）"}
+
+
+@app.get("/api/liepin_cities/sync_state")
+def api_liepin_cities_sync_state():
+    m, at = liepin.load_cities()
+    return {"running": _lp_city_state["running"], "last": _lp_city_state["last"],
+            "count": len(m), "synced_at": at}
 
 
 @app.get("/api/cities")
@@ -823,12 +859,6 @@ def api_offline_recover(hours: int = 24, source: str = None):
     scope = "全部" if hours <= 0 else f"最近 {hours} 小时内"
     return {"ok": n > 0, "count": n,
             "msg": f"已恢复 {n} 条为在招" if n else f"{scope}没有被判下线的岗位"}
-
-
-@app.get("/api/liepin_cities")
-def api_liepin_cities():
-    """猎聘支持的城市（配置页用来标注哪些城市能抓猎聘）"""
-    return {"cities": sorted(liepin.CITY_CODE.keys())}
 
 
 @app.get("/api/details_status")
