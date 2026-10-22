@@ -814,6 +814,17 @@ def api_backup():
     return {"ok": bool(p), "msg": f"已备份到 {p}" if p else "备份失败", "path": p}
 
 
+@app.post("/api/offline/recover")
+def api_offline_recover(hours: int = 24, source: str = None):
+    """撤销「已下线」判定（抓取不完整导致误杀时回滚）。hours<=0 表示不限时间、全部恢复"""
+    hours = int(hours or 24)
+    hours = 0 if hours <= 0 else min(hours, 24 * 30)
+    n = db.recover_offline(hours=hours, source=source or None)
+    scope = "全部" if hours <= 0 else f"最近 {hours} 小时内"
+    return {"ok": n > 0, "count": n,
+            "msg": f"已恢复 {n} 条为在招" if n else f"{scope}没有被判下线的岗位"}
+
+
 @app.get("/api/liepin_cities")
 def api_liepin_cities():
     """猎聘支持的城市（配置页用来标注哪些城市能抓猎聘）"""
