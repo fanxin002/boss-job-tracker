@@ -214,13 +214,39 @@ def main():
 
     r = client.post("/api/apply", json={"job_ids": []})
     check("API-投递空选拒绝", r.json()["ok"] is False, r.json()["msg"])
-    # 伪造已登录：写 state 文件
+    # 伪造已登录：state 文件 + Cookie 文件都要（get_login_state 会交叉校验 wt2）
     st_path = appmod.crawler.STATE_FILE
+    ck_path = appmod.crawler.COOKIE_FILE
     old = open(st_path, encoding="utf-8").read() if os.path.exists(st_path) else None
+    old_ck = open(ck_path, encoding="utf-8").read() if os.path.exists(ck_path) else None
     json.dump({"logged": False, "at": "", "note": ""}, open(st_path, "w", encoding="utf-8"))
     r = client.post("/api/apply", json={"job_ids": ["A"]})
     check("API-投递未登录拒绝", r.json()["ok"] is False and "未登录" in r.json()["msg"], r.json()["msg"])
+    # 状态文件说已登录、但 Cookie 没有 wt2 → 必须判为未登录（本次修的坑）
     json.dump({"logged": True, "at": "t", "note": ""}, open(st_path, "w", encoding="utf-8"))
+    json.dump([{"name": "__zp_stoken__", "value": "x", "domain": ".zhipin.com"}],
+              open(ck_path, "w", encoding="utf-8"))
+    check("登录-状态文件已登录但Cookie无wt2判为未登录",
+          appmod.crawler.get_login_state()["logged"] is False
+          and appmod.crawler.get_login_state().get("stale") is True)
+    check("登录-cookies_have_login 识别缺失", appmod.crawler.cookies_have_login() is False)
+    _cn = client.post("/api/crawl").json()
+    check("登录-获取前置拦截并提示登录", _cn["ok"] is False and _cn.get("need_login") is True,
+          _cn.get("msg", ""))
+    # 补上 wt2 后应视为已登录
+    json.dump([{"name": "wt2", "value": "x", "domain": ".zhipin.com"}],
+              open(ck_path, "w", encoding="utf-8"))
+    check("登录-有wt2即视为已登录",
+          appmod.crawler.cookies_have_login() is True
+          and appmod.crawler.get_login_state()["logged"] is True)
+    _st2 = client.get("/api/status").json()
+    check("进度-status带progress字段",
+          "progress" in _st2 and isinstance(_st2["progress"].get("pct"), int), str(_st2.get("progress")))
+    _appm_prog = appmod._progress_cb("boss")
+    _appm_prog(3, 10, "第3页")
+    check("进度-回调写入进度", appmod._PROGRESS["done"] == 3 and appmod._PROGRESS["total"] == 10)
+    appmod._progress_end()
+    check("进度-结束后清零", appmod._PROGRESS["total"] == 0)
     # 构造23个不同有效ID + 1个重复 + 1个无效 → 去重、过滤、截断到20
     extra = [mk(f"Z{i}") for i in range(22)]
     db.upsert_jobs(extra, rid2)
@@ -978,6 +1004,21 @@ def main():
     if os.path.isdir(_bkdir):
         import shutil as _sh
         _sh.rmtree(_bkdir, ignore_errors=True)
+    # 还原被测试伪造的登录态文件（Cookie 是真实凭据，必须原样写回）
+    try:
+        if old is not None:
+            open(st_path, "w", encoding="utf-8").write(old)
+        elif os.path.exists(st_path):
+            os.remove(st_path)
+    except Exception:
+        pass
+    try:
+        if old_ck is not None:
+            open(ck_path, "w", encoding="utf-8").write(old_ck)
+        elif os.path.exists(ck_path):
+            os.remove(ck_path)
+    except Exception:
+        pass
 
     # ---- 汇总 ----
     passed = sum(1 for s, *_ in RESULTS if s == "PASS")
