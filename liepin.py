@@ -165,6 +165,12 @@ def normalize(cards, kw, city_name, dq):
         seen.add(jid)
         salary_txt = (j.get("salary") or "").strip()
         refresh = str(j.get("refreshTime") or "")
+        # 猎聘 dq 形如「厦门-翔安区」或只有「厦门」；剥掉城市前缀，避免列表显示「厦门 厦门-翔安区」
+        area = (j.get("dq") or "").strip()
+        if city_name and area.startswith(city_name + "-"):
+            area = area[len(city_name) + 1:]
+        if area == city_name:
+            area = ""
         rows.append({
             "job_id": f"lp{jid}",
             "lid": "", "security_id": "",
@@ -180,7 +186,7 @@ def normalize(cards, kw, city_name, dq):
             "welfare": "",
             "boss_name": rec.get("recruiterName") or "",
             "boss_title": rec.get("recruiterTitle") or "",
-            "area_district": (j.get("dq") or "").strip()[:60],
+            "area_district": area[:60],
             "business_district": "", "lng": "", "lat": "",
             "job_url": link,
             "detail_text": "",
