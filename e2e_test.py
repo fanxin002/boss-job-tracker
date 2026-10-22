@@ -239,6 +239,27 @@ def main():
     check("登录-有wt2即视为已登录",
           appmod.crawler.cookies_have_login() is True
           and appmod.crawler.get_login_state()["logged"] is True)
+    # ---- 登录老掉防护：save_cookies 合并语义 ----
+    class _FakePage:
+        def cookies(self):
+            # 模拟「游客态」：没有 wt2，只有反爬 cookie（repair 未登录分支的真实场景）
+            return [{"name": "__zp_stoken__", "value": "new", "domain": ".zhipin.com"},
+                    {"name": "ab_guid", "value": "g", "domain": "www.zhipin.com"}]
+    json.dump([{"name": "wt2", "value": "KEEPME", "domain": ".zhipin.com"},
+               {"name": "__zp_stoken__", "value": "old", "domain": ".zhipin.com"}],
+              open(ck_path, "w", encoding="utf-8"))
+    appmod.crawler.save_cookies(_FakePage())
+    _merged = {c["name"]: c["value"] for c in json.load(open(ck_path, encoding="utf-8"))}
+    check("登录掉线-游客态保存不擦除wt2", _merged.get("wt2") == "KEEPME"
+          and appmod.crawler.cookies_have_login() is True, str(_merged))
+    check("登录掉线-同名cookie用新值覆盖", _merged.get("__zp_stoken__") == "new", str(_merged))
+    # 重新登录（新列表带同名 wt2）→ 正常覆盖为新值
+    class _FakePage2:
+        def cookies(self):
+            return [{"name": "wt2", "value": "FRESH", "domain": ".zhipin.com"}]
+    appmod.crawler.save_cookies(_FakePage2())
+    _merged2 = {c["name"]: c["value"] for c in json.load(open(ck_path, encoding="utf-8"))}
+    check("登录掉线-重新登录后wt2更新", _merged2.get("wt2") == "FRESH", str(_merged2))
     _st2 = client.get("/api/status").json()
     check("进度-status带progress字段",
           "progress" in _st2 and isinstance(_st2["progress"].get("pct"), int), str(_st2.get("progress")))
