@@ -210,6 +210,11 @@
   .desc-cell{max-width:180px;color:var(--muted);font-size:12px;line-height:1.5;cursor:pointer;
     display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
   .desc-cell:hover{color:var(--ink)}
+  /* 岗位名：点击开详情面板；右侧 ↗ 才是去原网站（避免"点标题就跳走"） */
+  .job-title{color:var(--ink);font-weight:700;text-decoration:none;cursor:pointer}
+  .job-title:hover{text-decoration:underline}
+  .ext{margin-left:6px;color:var(--muted-soft);text-decoration:none;font-size:12px}
+  .ext:hover{color:var(--primary)}
   .pager{display:flex;justify-content:space-between;align-items:center;margin-top:20px;font-size:12px;color:var(--muted)}
   .empty{padding:56px;text-align:center;color:var(--muted-soft);font-size:13px}
   table.jobs th:nth-child(1),table.jobs td:nth-child(1){width:34px}
@@ -574,7 +579,7 @@
         </div>
         <div class="muted" id="platSummary" style="margin-bottom:6px"></div>
         <div id="platWarn"></div>
-        <div class="muted" style="line-height:1.6">关键词、城市、定时、浏览器模式两平台<b>共用一份配置</b>；风控与请求预算两平台各算各的。BOSS 登录用顶部「登录 / 修复」，猎聘登录用顶部「登录猎聘」（独立登录态，长期有效）。猎聘只做获取/入库/看板合并，投递请到猎聘官网手动。</div>
+        <div class="muted" style="line-height:1.6">关键词、城市、定时、浏览器模式两平台<b>共用一份配置</b>；风控与请求预算两平台各算各的。登录点顶部两个平台胶囊（「BOSS」「猎聘」各自独立登录态，长期有效）。猎聘只做获取/入库/看板合并，投递请到猎聘官网手动。</div>
 
         <div class="sect">搜索范围（两平台共用）</div>
         <label>关键词（英文逗号分隔）</label>
@@ -1087,6 +1092,8 @@ async function getLoginState(){
       fetch('/api/login_state?platform=liepin').then(r=>r.json()).catch(()=>({}))
     ]);
     paintLoginChip('boss',b);paintLoginChip('liepin',l);
+    // 登录态一到位就刷新配置页的提示，否则会出现「顶部显示已登录、配置页仍说未登录」
+    if(document.getElementById('platWarn'))platWarnHint();
     const anyOpen=!!(b.login_open||l.login_open);
     const c=document.getElementById('btnCancelLogin');
     if(c)c.style.display=anyOpen?'':'none';
@@ -1302,8 +1309,8 @@ async function loadReplies(){
     <div class="dk"><div class="lb">已回复</div><b>${d.total||0}</b><div class="dt">收到 HR 消息的岗位</div></div>
     <div class="dk"><div class="lb">已投递</div><b>${d.applied||0}</b><div class="dt">其中走过投递流程</div></div>
     <div class="dk"><div class="lb">仍在招</div><b>${d.active||0}</b><div class="dt">岗位未下线</div></div>
-    <div class="dk"><div class="lb">上次同步</div><b style="font-size:16px">${esc((s.last||'未同步').slice(0,22))}</b>
-      <div class="dt">${s.running?'同步中…':(s.parsed?`读取 ${s.parsed} 个会话，匹配 ${s.matched} 个岗位`:'点右上角同步')}</div></div>`;
+    <div class="dk"><div class="lb">上次同步</div><b style="font-size:22px">${s.running?'同步中…':esc(s.at||'未同步')}</b>
+      <div class="dt" title="${esc(s.last||'')}">${s.running?'正在读取 BOSS 会话':esc((s.last||'点右上角「同步 BOSS 会话」').slice(0,30))}</div></div>`;
   const lpRows=(d.rows||[]).filter(r=>r.source==='liepin').length;
   document.getElementById('replyHint').innerHTML=
     '<b>自动同步只支持 BOSS</b>：靠「BOSS 会话列表里出现该公司名」判断，公司名对不上会漏判，漏了可在岗位详情手动「标记 HR 已回复」；同步只读取，不会给 HR 发任何消息。<br>'
@@ -1321,7 +1328,7 @@ async function loadReplies(){
     const isLp=r.source==='liepin';
     const platTag=platIcon(r.source,'lg');
     return `<tr>
-      <td>${platTag}<b>${esc(r.company||'')}</b><div class="muted">${esc(r.city_name||'')}${r.area_district?' '+esc(r.area_district):''}</div></td>
+      <td>${platTag}<b>${esc(r.company||'')}</b><div class="muted">${esc(locText(r.city_name,r.area_district))}</div></td>
       <td><a href="${esc(r.job_url||'#')}" target="_blank">${esc(r.job_name||'')}</a></td>
       <td>${r.salary?`<span class="tag tag-sal">${esc(r.salary)}</span>`:'<span class="muted">未知</span>'}</td>
       <td><span class="tag ${cls}" title="基于简历画像">${score}</span></td>
@@ -1436,6 +1443,15 @@ function platIcon(p,cls){
     +" src='data:image/svg+xml;charset=utf-8,"+uri+"'>";
 }
 
+/* 「城市 + 区」显示：猎聘 dq 会带城市前缀（厦门-翔安区）或与城市同名，统一收敛 */
+function locText(city,area){
+  city=(city||'').trim();let a=(area||'').trim();
+  if(!a)return city;
+  if(city&&a.startsWith(city+'-'))a=a.slice(city.length+1);
+  if(!a||a===city)return city;
+  return city?city+' '+a:a;
+}
+
 /* ========== 列表 ========== */
 function _daysSince(ts){
   if(!ts)return 0;
@@ -1449,7 +1465,7 @@ async function loadJobs(p){
   const d=await(await fetch(`/api/jobs?page=${curPage}&size=${ps}&`+filterQuery())).json();
   document.getElementById('totalHint').textContent=`共 ${d.total} 条`;
   document.getElementById('jobsBody').innerHTML=d.rows.map(j=>{
-    if(j.detail_text)JOB_CACHE[j.job_id]=j;
+    JOB_CACHE[j.job_id]=j;   // 整行缓存：详情面板打开零延迟（之前只缓存有描述的）
     const tags=[];
     if(j.experience)tags.push(`<span class="muted">${esc(j.experience)}</span>`);
     if(j.degree)tags.push(`<span class="muted">${esc(j.degree)}</span>`);
@@ -1484,12 +1500,12 @@ async function loadJobs(p){
     return `<tr class="${sel.has(j.job_id)?'sel':''}">
       <td><input type="checkbox" data-jid="${esc(j.job_id)}" ${sel.has(j.job_id)?'checked':''} ${j.status==='offline'||isLp?'disabled':''} onchange="toggleSel(this)"></td>
       <td class="plat">${platIcon(j.source)}</td>
-      <td><a href="${esc(j.job_url)}" target="_blank">${esc(j.job_name)}</a> ${dup}<div class="muted">${esc(j.keyword||'')}${j.industry?' / '+esc(j.industry):''}</div></td>
+      <td><a class="job-title" onclick="openJob('${esc(j.job_id)}')" title="点击查看详情（备注 / 求职阶段 / 完整描述）">${esc(j.job_name)}</a><a class="ext" href="${esc(j.job_url)}" target="_blank" title="到原网站打开该岗位" onclick="event.stopPropagation()">↗</a> ${dup}<div class="muted">${esc(j.keyword||'')}${j.industry?' / '+esc(j.industry):''}</div></td>
       <td>${j.salary?`<span class="tag tag-sal">${esc(j.salary)}</span>`:'<span class="muted">未知</span>'}</td>
       <td><span class="score ${score>=70?'hi':''}" title="本地规则打分：技能命中 / 薪资 / 学历">${score}</span></td>
       <td>${esc(j.company)}<div class="muted">${esc(j.scale||'')}</div>${j.boss_name?`<div class="muted">HR ${esc(j.boss_name)}${j.boss_title?'（'+esc(j.boss_title)+'）':''}</div>`:''}</td>
       <td>${tags.join('<br>')||'<span class="muted">无</span>'}</td>
-      <td>${esc(j.city_name)}${j.area_district?' '+esc(j.area_district):''}<div class="muted">${esc(j.business_district||'')}${j.lng?` <a class="maplink" onclick="openMap('${esc(j.job_id)}')" title="在内置地图查看公司位置">📍地图</a>`:''}</div></td>
+      <td>${esc(locText(j.city_name,j.area_district))}<div class="muted">${esc(j.business_district||'')}${j.lng?` <a class="maplink" onclick="openMap('${esc(j.job_id)}')" title="在内置地图查看公司位置">📍地图</a>`:''}</div></td>
       <td>${det}</td>
       <td>${st||'<span class="tag">在招</span>'}</td>
       <td class="muted">${esc((j.first_seen||'').slice(5,10))}</td>
@@ -1532,14 +1548,17 @@ function clearSel(){sel.clear();loadJobs(curPage)}
 /* ========== 详情 ========== */
 async function openJob(jid){
   let j=JOB_CACHE[jid];
-  if(!j){try{const d=await(await fetch('/api/jobs?page=1&size=200')).json();j=(d.rows||[]).find(x=>x.job_id===jid)}catch(e){}}
-  if(!j)return;
+  if(!j){
+    // 单条读取：之前是拉 200 条再本地 find，第 3 页之后的岗位会静默点不开
+    try{const d=await(await fetch('/api/job?job_id='+encodeURIComponent(jid))).json();j=d.job}catch(e){}
+  }
+  if(!j){toast('岗位信息读取失败，刷新页面后再试');return}
   curJobId=jid;
   document.getElementById('jobTitle').textContent=j.job_name||'无标题';
   document.getElementById('jobMeta').innerHTML=[
     `${platIcon(j.source,'lg')}<span class="muted">${(j.source||'boss')==='liepin'?'猎聘':'BOSS直聘'}</span>`,
     j.salary?`<span class="tag tag-sal">${esc(j.salary)}</span>`:'<span class="muted">薪资未知</span>',
-    esc(j.company||''),esc((j.city_name||'')+(j.area_district?' '+j.area_district:'')),
+    esc(j.company||''),esc(locText(j.city_name,j.area_district)),
     j.lng?`<a class="maplink" onclick="openMap('${esc(j.job_id)}')">📍 公司位置</a>`:'',
     esc(j.experience||''),esc(j.degree||''),esc(j.scale||''),
     j.boss_name?`<span class="muted">HR ${esc(j.boss_name)}${j.boss_title?'（'+esc(j.boss_title)+'）':''}</span>`:'',
