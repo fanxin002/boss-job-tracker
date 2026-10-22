@@ -6,9 +6,9 @@ TOKEN = os.environ.get("GH_TOKEN", "")
 OWNER, REPO, BRANCH = "fanxin002", "boss-job-tracker", "main"
 API = f"https://api.github.com/repos/{OWNER}/{REPO}/contents"
 ROOT = os.path.dirname(os.path.abspath(__file__))
-FILES = ["README.md", "static/index.html", "app.py", "crawler.py", "db.py",
-         "e2e_test.py", "liepin.py", "push_gh.py"]
-MSG = "fix: no more false 'offline' - require 2 consecutive misses + 60% coverage guard, add rollback"
+FILES = ["README.md", "static/index.html", "app.py", "liepin.py",
+         "e2e_test.py", "push_gh.py"]
+MSG = "feat: liepin full city sync (get-all-dq -> liepin_cities.json), same as BOSS cities.json"
 
 
 def req(url, data=None, method=None):
