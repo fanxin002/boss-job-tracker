@@ -721,6 +721,17 @@ def api_jobs(keyword: str = "", city_code: str = "", status: str = "",
     return {"total": total, "page": page, "size": size, "rows": rows, "counts": db.counts()}
 
 
+@app.get("/api/job")
+def api_job(job_id: str = ""):
+    """单条岗位（详情面板用）：不再让前端拉 200 条再本地找，翻页后的岗位也能打开"""
+    if not job_id:
+        return {"ok": False, "msg": "缺少 job_id"}
+    j = db.get_job(job_id)
+    if not j:
+        return {"ok": False, "msg": "岗位不存在"}
+    return {"ok": True, "job": j}
+
+
 @app.get("/api/counts")
 def api_counts():
     return db.counts()
@@ -883,7 +894,7 @@ def api_profile_patch(body: ProfilePatchIn):
 
 
 # ---------- 回复跟踪 ----------
-_reply_state = {"running": False, "last": "", "matched": 0, "parsed": 0}
+_reply_state = {"running": False, "last": "", "matched": 0, "parsed": 0, "at": ""}
 
 
 @app.post("/api/replies/sync")
@@ -902,9 +913,11 @@ def api_reply_sync():
         try:
             res = crawler.sync_replies()
             _reply_state.update(last=res.get("msg", ""), matched=res.get("matched", 0),
-                                parsed=res.get("parsed", 0))
+                                parsed=res.get("parsed", 0),
+                                at=datetime.now().strftime("%m-%d %H:%M"))
         except Exception as e:
             _reply_state["last"] = f"同步异常：{e}"
+            _reply_state["at"] = datetime.now().strftime("%m-%d %H:%M")
         finally:
             _reply_state["running"] = False
 

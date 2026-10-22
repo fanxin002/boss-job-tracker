@@ -883,6 +883,11 @@ def main():
     _rp = client.get("/api/replies").json()
     check("回复-标注平台支持范围（猎聘不支持）",
           _rp.get("sync_supported") == {"boss": True, "liepin": False}, str(_rp.get("sync_supported")))
+    # 单条岗位接口（详情面板）：翻页后的岗位也要能打开
+    _one = client.get("/api/job?job_id=lp1974831551").json()
+    check("详情-单条岗位可读", _one.get("ok") is True and _one["job"]["job_id"] == "lp1974831551")
+    check("详情-不存在岗位返回失败", client.get("/api/job?job_id=NOPE").json()["ok"] is False)
+    check("详情-缺参数被拒", client.get("/api/job").json()["ok"] is False)
     # 匹配分：入库后自动重算（此前只在画像更新时算，导致新岗位全是 0）
     _c = db.conn()
     _c.execute("UPDATE jobs SET match_score=0 WHERE job_id='lp1974831551'")
