@@ -258,8 +258,35 @@ def get_login_state():
 
 
 def save_cookies(page):
+    """保存 Cookie：**合并写**，不清除已有的登录凭据。
+
+    曾经的坑（用户反馈「登录老掉」的根因）：这里是全量覆盖写，
+    而 repair_flow 在「未登录」分支也会调它 → 游客 cookie 把已保存的 wt2 擦掉，
+    表现为登录莫名其妙丢失。合并语义：新 cookie 按 (name, domain) 覆盖同名项、
+    追加新项；旧文件里的 wt2/bsti 在新列表没有同名项时**自动保留**（dict 合并天性）。
+    BOSS 主动踢会话会删/换 wt2，那时新列表带同名项会正常覆盖，不会留死值。
+    """
     import json as _json
-    _json.dump(_cookie_list(page), open(COOKIE_FILE, "w", encoding="utf-8"))
+    try:
+        new = _cookie_list(page)
+    except Exception:
+        return
+    old = []
+    try:
+        with open(COOKIE_FILE, encoding="utf-8") as f:
+            old = _json.load(f) or []
+    except Exception:
+        old = []
+
+    def _key(c):
+        name = c.get("name") if isinstance(c, dict) else getattr(c, "name", None)
+        dom = c.get("domain") if isinstance(c, dict) else getattr(c, "domain", "")
+        return (str(name), str(dom))
+
+    merged = {_key(c): c for c in old}   # 旧的先入（含 wt2/bsti）
+    for c in new:                        # 新的覆盖同名项、追加新项
+        merged[_key(c)] = c
+    _json.dump(list(merged.values()), open(COOKIE_FILE, "w", encoding="utf-8"))
 
 
 LOGIN_COOKIES = ("wt2", "bsti")
@@ -285,14 +312,36 @@ def cookies_have_login():
 def inject_cookies(page):
     """先落地域名再写 Cookie，写完重新导航一次：
     让 BOSS 自己的 JS 在带 Cookie 的会话里重新生成 __zp_stoken__ 等风控令牌，
-    否则沿用旧令牌容易被判定 code=36/37"""
+    否则沿用旧令牌容易被判定 code=36/37。
+
+    注入策略（防「登录老掉」的关键一环）：
+      - 登录凭据 wt2/bsti 用**文件里的值**（登录成功时 save_cookies 一定写了最新鲜的）
+      - 其余 cookie **只补浏览器当前没有的**，不覆盖浏览器已有的
+    这样浏览器 profile 里刚登录的有效会话不会被文件里的旧值冲掉；
+    反过来文件里有登录态而 profile 没有时，也能正常补上。
+    """
     import json as _json
     if not os.path.exists(COOKIE_FILE):
         return False
     try:
+        saved = _json.load(open(COOKIE_FILE, encoding="utf-8")) or []
+    except Exception:
+        return False
+    try:
         page.get("https://www.zhipin.com/web/geek/jobs")
         time.sleep(1.2)
-        page.set.cookies(_json.load(open(COOKIE_FILE, encoding="utf-8")))
+        have = set()
+        for c in _cookie_list(page):
+            nm = c.get("name") if isinstance(c, dict) else getattr(c, "name", None)
+            if nm:
+                have.add(str(nm))
+        to_set = []
+        for c in saved:
+            nm = str(c.get("name") if isinstance(c, dict) else getattr(c, "name", "") or "")
+            if nm in LOGIN_COOKIES or nm not in have:
+                to_set.append(c)      # 登录凭据：文件权威；其他：只补缺
+        if to_set:
+            page.set.cookies(to_set)
         page.get("https://www.zhipin.com/web/geek/jobs")  # 带 Cookie 重新加载，刷新令牌
         time.sleep(1.2)
         return True
@@ -401,8 +450,10 @@ def repair_flow(keyword="数据分析", city_code="101230200"):
                 _record_risk(code, msg)
                 result["msg"] = f"已登录但接口仍被拦（code={code} {msg}），请在窗口里完成验证"
             else:
-                # 关键：接口放行 ≠ 已登录。游客态也能搜，但没有 wt2，获取轮会被拒
-                save_cookies(page)             # 反爬 cookie 先存，登录后覆盖
+                # 关键：接口放行 ≠ 已登录。游客态也能搜，但没有 wt2，获取轮会被拒。
+                # 这里**不保存 cookie**：曾经的坑——未登录时全量覆盖写会把已保存的
+                # wt2 擦掉（用户反馈「登录老掉」的根因）；游客反爬 cookie 没有保存价值，
+                # 注入时 BOSS 自己的 JS 会重新生成 __zp_stoken__ 等令牌。
                 result["msg"] = "还没登录：请在弹出的窗口里扫码登录 BOSS（接口可用但游客态不算登录）"
             time.sleep(15)
         else:
