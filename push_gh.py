@@ -6,8 +6,8 @@ TOKEN = os.environ.get("GH_TOKEN", "")
 OWNER, REPO, BRANCH = "fanxin002", "boss-job-tracker", "main"
 API = f"https://api.github.com/repos/{OWNER}/{REPO}/contents"
 ROOT = os.path.dirname(os.path.abspath(__file__))
-FILES = ["README.md", "app.py", "crawler.py", "e2e_test.py", "push_gh.py"]
-MSG = "fix: stop wiping BOSS login cookie - merge save_cookies, no save when logged-out, additive inject"
+FILES = ["README.md", "app.py", "crawler.py", "db.py", "e2e_test.py", "push_gh.py"]
+MSG = "fix: mark_offline entry/exit diagnostic logs (it once hung silently for 10min in run 29)"
 
 
 def req(url, data=None, method=None):
