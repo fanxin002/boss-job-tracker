@@ -492,25 +492,31 @@ def new_jobs_of_run(run_id, limit=5):
     return [dict(r) for r in rows]
 
 
-def counts():
-    """轻量计数（列表刷新用，替代拉全量 stats）"""
+def counts(source=""):
+    """轻量计数（列表刷新用，替代拉全量 stats）。source='' 全部 / 'boss' / 'liepin'"""
     c = conn()
-    one = lambda s: c.execute(s).fetchone()[0]  # noqa: E731
+    src = (source or "").strip()
+    base = "WHERE source=?" if src else "WHERE 1=1"
+    bp = (src,) if src else ()
+    one = lambda s, p=(): c.execute(s, bp + tuple(p)).fetchone()[0]  # noqa: E731
     out = {
-        "total": one("SELECT COUNT(*) FROM jobs"),
-        "active": one("SELECT COUNT(*) FROM jobs WHERE status='active'"),
-        "offline": one("SELECT COUNT(*) FROM jobs WHERE status='offline'"),
-        "new": one("SELECT COUNT(*) FROM jobs WHERE is_new=1"),
-        "applied": one("SELECT COUNT(*) FROM jobs WHERE applied=1"),
-        "salary_missing": one("SELECT COUNT(*) FROM jobs WHERE salary_min IS NULL OR salary_min<=0"),
-        "desc_done": one("SELECT COUNT(*) FROM jobs WHERE detail_text IS NOT NULL AND detail_text<>''"),
-        "starred": one("SELECT COUNT(*) FROM jobs WHERE starred=1"),
-        "replied": one("SELECT COUNT(*) FROM jobs WHERE replied=1"),
-        "interview": one("SELECT COUNT(*) FROM jobs WHERE stage='interview'"),
-        "offer": one("SELECT COUNT(*) FROM jobs WHERE stage='offer'"),
-        "rejected": one("SELECT COUNT(*) FROM jobs WHERE stage='rejected'"),
+        "total": one(f"SELECT COUNT(*) FROM jobs {base}"),
+        "active": one(f"SELECT COUNT(*) FROM jobs {base} AND status='active'"),
+        "offline": one(f"SELECT COUNT(*) FROM jobs {base} AND status='offline'"),
+        "new": one(f"SELECT COUNT(*) FROM jobs {base} AND is_new=1"),
+        "applied": one(f"SELECT COUNT(*) FROM jobs {base} AND applied=1"),
+        "salary_missing": one(f"SELECT COUNT(*) FROM jobs {base} "
+                              "AND (salary_min IS NULL OR salary_min<=0)"),
+        "desc_done": one(f"SELECT COUNT(*) FROM jobs {base} "
+                         "AND detail_text IS NOT NULL AND detail_text<>''"),
+        "starred": one(f"SELECT COUNT(*) FROM jobs {base} AND starred=1"),
+        "replied": one(f"SELECT COUNT(*) FROM jobs {base} AND replied=1"),
+        "interview": one(f"SELECT COUNT(*) FROM jobs {base} AND stage='interview'"),
+        "offer": one(f"SELECT COUNT(*) FROM jobs {base} AND stage='offer'"),
+        "rejected": one(f"SELECT COUNT(*) FROM jobs {base} AND stage='rejected'"),
         "overdue": one(
-            "SELECT COUNT(*) FROM jobs WHERE applied=1 AND COALESCE(replied,0)=0 AND status='active' "
+            f"SELECT COUNT(*) FROM jobs {base} AND applied=1 "
+            "AND COALESCE(replied,0)=0 AND status='active' "
             "AND julianday('now','localtime') - julianday(COALESCE(NULLIF(applied_at,''), first_seen)) >= 3"),
     }
     c.close()
@@ -600,20 +606,27 @@ def get_staged(limit=500):
     return out
 
 
-def get_replied(limit=200):
-    """已回复岗位列表（按回复时间倒序，前端「HR 回复」页用）"""
+def get_replied(limit=200, source=""):
+    """已回复岗位列表（按回复时间倒序，前端「HR 回复」页用）
+
+    回复状态只有 BOSS 能自动同步；猎聘行只能靠手动标记，所以带上 source 让前端区分。
+    """
+    src = (source or "").strip()
+    cond = " AND source=?" if src else ""
+    params = ((src,) if src else ())
     c = conn()
     rows = c.execute(
         "SELECT job_id, job_name, company, salary, salary_min, salary_max, city_name, area_district, "
+        "COALESCE(source,'boss') source, "
         "job_url, status, applied, applied_at, replied, reply_note, reply_at, note, starred, "
-        "match_score, first_seen, stage, stage_at, stage_note FROM jobs WHERE replied=1 "
-        "ORDER BY COALESCE(reply_at,'') DESC, COALESCE(match_score,0) DESC LIMIT ?",
-        (limit,)).fetchall()
+        "match_score, first_seen, stage, stage_at, stage_note FROM jobs WHERE replied=1" + cond +
+        " ORDER BY COALESCE(reply_at,'') DESC, COALESCE(match_score,0) DESC LIMIT ?",
+        params + (limit,)).fetchall()
     stats = c.execute(
         "SELECT COUNT(*) total, "
         "SUM(CASE WHEN applied=1 THEN 1 ELSE 0 END) applied, "
         "SUM(CASE WHEN status='active' THEN 1 ELSE 0 END) active "
-        "FROM jobs WHERE replied=1").fetchone()
+        "FROM jobs WHERE replied=1" + cond, params).fetchone()
     c.close()
     return {"total": stats["total"] or 0, "applied": stats["applied"] or 0,
             "active": stats["active"] or 0, "rows": [dict(r) for r in rows]}
@@ -686,13 +699,16 @@ def recompute_scores(prof=None):
     low_skills = [(s.lower(), s) for s in skills]
     c = conn()
     rows = c.execute(
-        "SELECT job_id, job_name, skills, welfare, detail_text, salary_min, salary_max, "
+        "SELECT job_id, job_name, skills, welfare, detail_text, industry, salary_min, salary_max, "
         "degree, city_name FROM jobs"
     ).fetchall()
     upd = []
     for r in rows:
+        # 猎聘搜索卡片没有 skills/welfare/detail，只能靠职位名 + 行业命中技能；
+        # 全部拼进同一个可匹配文本，两个平台用同一套规则，分数才可比。
         hay = " ".join([str(r["job_name"] or ""), str(r["skills"] or ""),
-                        str(r["detail_text"] or ""), str(r["welfare"] or "")]).lower()
+                        str(r["detail_text"] or ""), str(r["welfare"] or ""),
+                        str(r["industry"] or "")]).lower()
         name_low = str(r["job_name"] or "").lower()
 
         # 1) 技能命中：核心技能命中率 * 32 + 其他技能命中数 * 1.6，上限 45
@@ -868,24 +884,39 @@ def get_quota(limit=150, source="boss"):
             "left": max(0, limit - used), "pct": round(used * 100.0 / limit, 1) if limit else 0}
 
 
-def stats(days=14):
-    """看板聚合数据（一次查询多组，避免前端多次请求）"""
+def stats(days=14, source=""):
+    """看板聚合数据（一次查询多组，避免前端多次请求）
+
+    source='' 全部 / 'boss' / 'liepin'：所有指标都按平台过滤，避免两平台数据混在一起看。
+    """
     from datetime import date, timedelta
     c = conn()
-    g = lambda sql, p=(): c.execute(sql, p).fetchone()[0]  # noqa: E731
+    src = (source or "").strip()
+    base = "WHERE source=?" if src else "WHERE 1=1"
+    bp = (src,) if src else ()
+
+    def g(sql, p=()):
+        return c.execute(sql, bp + tuple(p)).fetchone()[0]
+
     out = {
-        "total": g("SELECT COUNT(*) FROM jobs"),
-        "active": g("SELECT COUNT(*) FROM jobs WHERE status='active'"),
-        "offline": g("SELECT COUNT(*) FROM jobs WHERE status='offline'"),
-        "new_today": g("SELECT COUNT(*) FROM jobs WHERE substr(first_seen,1,10)=?", (date.today().isoformat(),)),
-        "applied": g("SELECT COUNT(*) FROM jobs WHERE applied=1"),
-        "apply_fail": g("SELECT COUNT(*) FROM jobs WHERE applied=2"),
-        "salary_known": g("SELECT COUNT(*) FROM jobs WHERE salary_min IS NOT NULL AND salary_min>0"),
-        "desc_done": g("SELECT COUNT(*) FROM jobs WHERE detail_text IS NOT NULL AND detail_text<>''"),
+        "total": g(f"SELECT COUNT(*) FROM jobs {base}"),
+        "active": g(f"SELECT COUNT(*) FROM jobs {base} AND status='active'"),
+        "offline": g(f"SELECT COUNT(*) FROM jobs {base} AND status='offline'"),
+        "new_today": g(f"SELECT COUNT(*) FROM jobs {base} AND substr(first_seen,1,10)=?",
+                       (date.today().isoformat(),)),
+        "applied": g(f"SELECT COUNT(*) FROM jobs {base} AND applied=1"),
+        "apply_fail": g(f"SELECT COUNT(*) FROM jobs {base} AND applied=2"),
+        "salary_known": g(f"SELECT COUNT(*) FROM jobs {base} "
+                          "AND salary_min IS NOT NULL AND salary_min>0"),
+        "desc_done": g(f"SELECT COUNT(*) FROM jobs {base} "
+                       "AND detail_text IS NOT NULL AND detail_text<>''"),
     }
     out["salary_missing"] = out["total"] - out["salary_known"]
-    avg = c.execute("SELECT AVG((salary_min+salary_max)/2.0) FROM jobs "
-                    "WHERE salary_min IS NOT NULL AND salary_max IS NOT NULL").fetchone()[0]
+    # 平台维度计数（前端筛选器显示各平台条数，不随当前筛选变化）
+    out["by_source"] = {r["source"] or "boss": r["n"] for r in c.execute(
+        "SELECT COALESCE(source,'boss') source, COUNT(*) n FROM jobs GROUP BY source")}
+    avg = c.execute(f"SELECT AVG((salary_min+salary_max)/2.0) FROM jobs {base} "
+                    "AND salary_min IS NOT NULL AND salary_max IS NOT NULL", bp).fetchone()[0]
     out["avg_salary"] = round(avg, 1) if avg else None
     out["apply_rate"] = round(out["applied"] * 100.0 / out["active"], 1) if out["active"] else 0
     out["desc_rate"] = round(out["desc_done"] * 100.0 / out["total"], 1) if out["total"] else 0
@@ -893,16 +924,16 @@ def stats(days=14):
     # 近 7 天 vs 前 7 天（看板环比）
     d7 = (date.today() - timedelta(days=6)).isoformat()
     d14 = (date.today() - timedelta(days=13)).isoformat()
-    out["new_7d"] = g("SELECT COUNT(*) FROM jobs WHERE substr(first_seen,1,10)>=?", (d7,))
-    out["new_prev_7d"] = g("SELECT COUNT(*) FROM jobs WHERE substr(first_seen,1,10)>=? "
+    out["new_7d"] = g(f"SELECT COUNT(*) FROM jobs {base} AND substr(first_seen,1,10)>=?", (d7,))
+    out["new_prev_7d"] = g(f"SELECT COUNT(*) FROM jobs {base} AND substr(first_seen,1,10)>=? "
                            "AND substr(first_seen,1,10)<?", (d14, d7))
     prev = out["new_prev_7d"]
     out["new_delta"] = round((out["new_7d"] - prev) * 100.0 / prev, 1) if prev else None
 
     # 近 N 天新增趋势
     start = (date.today() - timedelta(days=days - 1)).isoformat()
-    rows = c.execute("SELECT substr(first_seen,1,10) d, COUNT(*) n FROM jobs "
-                     "WHERE substr(first_seen,1,10)>=? GROUP BY d", (start,)).fetchall()
+    rows = c.execute(f"SELECT substr(first_seen,1,10) d, COUNT(*) n FROM jobs {base} "
+                     "AND substr(first_seen,1,10)>=? GROUP BY d", bp + (start,)).fetchall()
     m = {r["d"]: r["n"] for r in rows}
     trend = []
     for i in range(days):
@@ -914,7 +945,8 @@ def stats(days=14):
     buckets = [(0, 5, "<5K"), (5, 8, "5-8K"), (8, 10, "8-10K"), (10, 15, "10-15K"),
                (15, 20, "15-20K"), (20, 30, "20-30K"), (30, 50, "30-50K"), (50, 999, "50K+")]
     salary = [{"label": lb, "n": 0} for _, _, lb in buckets]
-    for r in c.execute("SELECT salary_min FROM jobs WHERE salary_min IS NOT NULL AND salary_min>0"):
+    for r in c.execute(f"SELECT salary_min FROM jobs {base} "
+                       "AND salary_min IS NOT NULL AND salary_min>0", bp):
         v = r["salary_min"]
         for i, (lo, hi, _lb) in enumerate(buckets):
             if lo <= v < hi:
@@ -925,8 +957,8 @@ def stats(days=14):
     def top(col, limit=8, skip_empty=True):
         cond = f"{col} IS NOT NULL AND {col}<>''" if skip_empty else "1=1"
         return [{"label": r[0], "n": r[1]} for r in c.execute(
-            f"SELECT {col} label, COUNT(*) n FROM jobs WHERE {cond} "
-            f"GROUP BY {col} ORDER BY n DESC LIMIT ?", (limit,))]
+            f"SELECT {col} label, COUNT(*) n FROM jobs {base} AND {cond} "
+            f"GROUP BY {col} ORDER BY n DESC LIMIT ?", bp + (limit,))]
     out["degrees"] = top("degree", 6)
     out["experiences"] = top("experience", 6)
     out["scales"] = top("scale", 6)
@@ -935,20 +967,29 @@ def stats(days=14):
     out["keywords"] = top("keyword", 8)
     out["stages"] = top("brand_stage", 6)
     out["boss_titles"] = top("boss_title", 8)
-    out["proxy"] = g("SELECT COUNT(*) FROM jobs WHERE status='active' AND COALESCE(proxy_job,0)=1")
+    out["proxy"] = g(f"SELECT COUNT(*) FROM jobs {base} "
+                     "AND status='active' AND COALESCE(proxy_job,0)=1")
     c.close()
     return out
 
 
-def map_points():
-    """内置地图用：在招岗位的坐标点位（含薪资/HR在线状态）"""
+def map_points(source=""):
+    """内置地图用：在招岗位的坐标点位（含薪资/HR在线状态）
+
+    source='' 全部 / 'boss' / 'liepin'。注意：猎聘搜索卡片本身不带经纬度，
+    所以 source='liepin' 时通常为空，前端会显示相应说明。
+    """
     c = conn()
+    src = (source or "").strip()
+    cond = " AND source=?" if src else ""
     rows = c.execute(
         "SELECT job_id, job_name, company, salary, salary_min, salary_max, city_name, area_district, "
+        "COALESCE(source,'boss') source, "
         "business_district, lng, lat, boss_name, boss_title, status, applied, match_score, job_url "
-        "FROM jobs WHERE lng IS NOT NULL AND lng<>'' AND lat IS NOT NULL AND lat<>'' "
-        "ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, "
-        "COALESCE(match_score,0) DESC LIMIT 1500").fetchall()
+        "FROM jobs WHERE lng IS NOT NULL AND lng<>'' AND lat IS NOT NULL AND lat<>''" + cond +
+        " ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, "
+        "COALESCE(match_score,0) DESC LIMIT 1500",
+        ((src,) if src else ())).fetchall()
 
     c.close()
     out = []
@@ -961,6 +1002,17 @@ def map_points():
         d["lng"], d["lat"] = lng, lat
         out.append(d)
     return out
+
+
+def no_coord_stats():
+    """各平台缺坐标的岗位数（前端地图提示用）"""
+    with _lock:
+        c = conn()
+        rows = c.execute(
+            "SELECT COALESCE(source,'boss') source, COUNT(*) n FROM jobs "
+            "WHERE lng IS NULL OR lng='' OR lat IS NULL OR lat='' GROUP BY source").fetchall()
+        c.close()
+    return {r["source"]: r["n"] for r in rows}
 
 
 def get_applications(limit=50, batch_id=None):
