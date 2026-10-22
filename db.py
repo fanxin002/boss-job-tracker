@@ -1259,6 +1259,97 @@ def skill_gap(limit=18, source="", min_jobs=3):
     return {"total": total, "have": have[:limit], "gap": gap[:limit], "coverage": covered}
 
 
+def _median(vals):
+    """中位数（偶数个取中间两个均值）；空列表返回 None"""
+    if not vals:
+        return None
+    s = sorted(vals)
+    n = len(s)
+    mid = n // 2
+    return s[mid] if n % 2 else round((s[mid - 1] + s[mid]) / 2.0, 1)
+
+
+def skill_salary(source="", min_jobs=5, limit=15):
+    """技能薪资分析：哪些技能在高薪岗位里更重要（市场需求侧，与 skill_gap 的个人视角互补）
+
+    每个技能给出：
+      jobs/pct       要求该技能的在招岗位数与占比（需求热度）
+      sal            要求该技能的岗位薪资中位数（K/月）
+      base           不要求该技能的岗位薪资中位数（对照基准）
+      premium        sal - base：这个技能「值多少 K」的组间差（相关性，非因果）
+      high_rate      该技能在「高薪岗」中的出现率（高薪岗 = 薪资≥全体 P75）
+      lift           high_rate / 整体出现率，>1 说明高薪岗明显更看重该技能
+    薪资代表值 = (salary_min+salary_max)/2；面议/缺失的岗位不计入薪资统计。
+    """
+    import resume as resume_mod
+    src = (source or "").strip()
+    cond = " AND source=?" if src else ""
+    c = conn()
+    rows = c.execute(
+        "SELECT job_name, skills, welfare, detail_text, salary_min, salary_max "
+        "FROM jobs WHERE status='active'" + cond,
+        ((src,) if src else ())).fetchall()
+    c.close()
+
+    # 每条岗位：薪资代表值 + 命中的技能集合
+    jobs, sals = [], []
+    for r in rows:
+        smin, smax = r["salary_min"], r["salary_max"]
+        if smin is not None and smax is not None:
+            sal = (smin + smax) / 2.0
+        elif smax is not None:
+            sal = float(smax)
+        elif smin is not None:
+            sal = float(smin)
+        else:
+            sal = None
+        hay = " ".join([str(r["job_name"] or ""), str(r["skills"] or ""),
+                        str(r["welfare"] or ""), str(r["detail_text"] or "")]).lower()
+        hit = {name for name, aliases, _w in resume_mod.SKILL_DICT
+               if any(resume_mod._has(a, hay) for a in aliases)}
+        jobs.append({"sal": sal, "hit": hit})
+        if sal is not None:
+            sals.append(sal)
+
+    total = len(jobs)
+    if not total or not sals:
+        return {"total": total, "known": len(sals), "high_threshold": None,
+                "median_salary": None, "skills": []}
+
+    sals_sorted = sorted(sals)
+    # 高薪线 = 薪资 P75
+    idx75 = int(round(0.75 * (len(sals_sorted) - 1)))
+    high_thr = sals_sorted[idx75]
+    high_sals = [s for s in sals if s >= high_thr]
+
+    out = []
+    for name, _al, _w in resume_mod.SKILL_DICT:
+        with_jobs = [j for j in jobs if name in j["hit"]]
+        n = len(with_jobs)
+        if n < min_jobs:
+            continue
+        without_jobs = [j for j in jobs if name not in j["hit"]]
+        sal_with = _median([j["sal"] for j in with_jobs if j["sal"] is not None])
+        sal_without = _median([j["sal"] for j in without_jobs if j["sal"] is not None])
+        high_n = sum(1 for j in with_jobs if j["sal"] is not None and j["sal"] >= high_thr)
+        known_with = sum(1 for j in with_jobs if j["sal"] is not None)
+        pct = round(n * 100.0 / total, 1)
+        high_rate = round(high_n * 100.0 / known_with, 1) if known_with else 0
+        out.append({
+            "skill": name, "jobs": n, "pct": pct,
+            "salary": sal_with, "base": sal_without,
+            "premium": round(sal_with - sal_without, 1) if (sal_with is not None and sal_without is not None) else None,
+            "high_rate": high_rate,
+            "lift": round(high_rate / pct, 2) if pct else None,
+        })
+    return {
+        "total": total, "known": len(sals),
+        "high_threshold": round(high_thr, 1),
+        "median_salary": _median(sals),
+        "skills": out[:limit * 4],   # 前端两种排序各取 limit，这里多给一些
+    }
+
+
 def conversion(by="source", source="", limit=12):
     """投递转化分析：按维度分组看 岗位数 / 已投 / 已回复 / 面试 / Offer 与转化率"""
     dims = {
