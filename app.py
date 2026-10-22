@@ -23,6 +23,11 @@ import resume as resume_mod
 
 app = FastAPI(title="BOSS岗位追踪")
 db.init_db()
+# 启动即备份一次（保留最近 7 份），避免误操作/写坏后无库可回
+try:
+    _BOOT_BACKUP = db.backup()
+except Exception:
+    _BOOT_BACKUP = ""
 
 # 本地静态资源（Leaflet 地图库内置，不依赖外网 CDN 的 js/css）
 import os as _os
@@ -104,6 +109,7 @@ def do_crawl(trigger="manual"):
     rid = db.create_run(",".join(keywords), ",".join(c["name"] for c in cities), pages, trigger)
     _state["run_id"] = rid
     try:
+        db.backup()          # 每轮获取前留一份快照（保留 7 份）
         crawler.clear_last_risk()
         fetched, new_cnt, off_cnt = crawler.run_crawl(rid, keywords, cities, pages, detail,
                                                       headless, offscreen, degree)
@@ -172,6 +178,14 @@ def do_crawl_liepin(trigger="manual"):
     try:
         fetched, new_cnt, off_cnt = liepin.run_crawl(rid, keywords, cities, lp_pages,
                                                      headless=headless, offscreen=offscreen)
+        # 猎聘卡片没有经纬度：用同城同区的 BOSS 坐标做区级近似点位，让地图也能看猎聘
+        try:
+            n_coord = db.fill_approx_coords("liepin")
+            if n_coord["district"] or n_coord["city"]:
+                db.append_run_log(rid, f"🗺 已补区级近似坐标 {n_coord['district'] + n_coord['city']} 条"
+                                       f"（同区 {n_coord['district']} / 同城兜底 {n_coord['city']}）")
+        except Exception as e:
+            db.append_run_log(rid, f"⚠️ 近似坐标补全失败：{e}")
         _rescore(rid)   # 猎聘卡片没有技能标签，更依赖职位名/行业命中，同样要入库后立刻打分
         db.finish_run(rid, "success" if fetched else "empty", fetched, new_cnt, off_cnt)
         if push.has_token() and str(cfg.get("push_enabled", "1")) == "1":
@@ -588,26 +602,38 @@ def _do_details(job_ids, filters, limit):
             total, rows = db.query_jobs({**f, "page": 1, "size": limit})
             jobs = rows
             scope = "当前筛选结果"
-        # 猎聘描述页与 BOSS 完全不同的结构：这里只处理 BOSS，猎聘行跳过并说明
-        lp = [j for j in jobs if (j.get("source") or "") == "liepin"]
-        jobs = [j for j in jobs if (j.get("source") or "") != "liepin"]
-        if lp:
-            _log_detail(f"⏭ 跳过 {len(lp)} 条猎聘岗位：猎聘描述页结构不同，暂不支持自动补抓")
+        # 两个平台的详情页结构完全不同：BOSS 走 crawler，猎聘走 liepin.run_details
+        boss_jobs = [j for j in jobs if (j.get("source") or "") != "liepin"]
+        lp_jobs = [j for j in jobs if (j.get("source") or "") == "liepin"]
         with _apply_lock:
             _detail_state.update(log=[], total=total, done=0)
-        if not jobs:
-            _log_detail(f"{scope}里没有需要补抓的 BOSS 岗位（已有描述的会跳过）")
+        if not boss_jobs and not lp_jobs:
+            _log_detail(f"{scope}里没有需要补抓的岗位（已有描述的会跳过）")
             return
-        _log_detail(f"📄 {scope}：待补抓 {total} 条，本批 BOSS {len(jobs)} 条（每条约 3~6 秒，防风控）")
-        crawler.clear_last_risk()
-        ok, fail = crawler.backfill_details(
-            jobs, _log_detail,
-            should_cancel=lambda: _detail_cancel["flag"],
-            on_progress=lambda i, t: _detail_state.update(done=i, total=t))
-        if crawler.LAST_RISK.get("code") is not None:
-            risk = db.set_risk(crawler.LAST_RISK["code"], crawler.LAST_RISK["msg"])
-            _log_detail(f"🔒 已上风控冷却锁 {risk['remaining_min']} 分钟")
-            # 描述会进入匹配文本，补完必须重算，否则新描述不参与打分
+        _log_detail(f"📄 {scope}：待补抓 {total} 条（BOSS {len(boss_jobs)} / 猎聘 {len(lp_jobs)}），"
+                    f"每条约 3~6 秒，防风控")
+        ok = fail = 0
+        if boss_jobs:
+            crawler.clear_last_risk()
+            b_ok, b_fail = crawler.backfill_details(
+                boss_jobs, _log_detail,
+                should_cancel=lambda: _detail_cancel["flag"],
+                on_progress=lambda i, t: _detail_state.update(done=i, total=t))
+            ok += b_ok
+            fail += b_fail
+            if crawler.LAST_RISK.get("code") is not None:
+                risk = db.set_risk(crawler.LAST_RISK["code"], crawler.LAST_RISK["msg"])
+                _log_detail(f"🔒 已上风控冷却锁 {risk['remaining_min']} 分钟")
+        if lp_jobs and not _detail_cancel["flag"]:
+            _log_detail(f"🟠 猎聘详情：{len(lp_jobs)} 条（取 JD / 福利 / 区县）")
+            l_ok, l_fail = liepin.run_details(
+                lp_jobs, _log_detail,
+                should_cancel=lambda: _detail_cancel["flag"],
+                on_progress=lambda i, t: _detail_state.update(done=i, total=t))
+            ok += l_ok
+            fail += l_fail
+        _log_detail(f"✅ 完成：成功 {ok} 条，失败 {fail} 条")
+        # 描述会进入匹配文本，补完必须重算，否则新描述不参与打分
         if ok:
             n = _rescore()
             _log_detail(f"🎯 已按画像重算 {n} 条岗位匹配分")
@@ -634,13 +660,25 @@ def api_details(body: DetailsIn):
         return {"ok": False, "msg": _risk_block_msg(risk)}
     if crawler.repair_state()["running"] or crawler.get_login_state().get("login_open"):
         return {"ok": False, "msg": "登录/修复窗口进行中，请先完成"}
-    if not crawler.get_login_state().get("logged"):
-        return {"ok": False, "msg": "未登录：请先点「🔧 修复登录态」"}
     ids = [str(x) for x in (body.job_ids or []) if x]
+    if not crawler.get_login_state().get("logged") and _pending_has_boss(ids, body.filters or {}):
+        return {"ok": False, "msg": "未登录：BOSS 岗位补抓需要先点顶部「BOSS」胶囊登录（只补猎聘的话不需要）"}
     with _apply_lock:
         _detail_state["running"] = True
     threading.Thread(target=_do_details, args=[ids, body.filters or {}, limit], daemon=True).start()
     return {"ok": True, "msg": f"已启动补抓（{'勾选 '+str(len(ids))+' 条' if ids else '当前筛选结果'}，本批最多 {limit} 条）"}
+
+
+def _pending_has_boss(job_ids, filters):
+    """本次补抓范围里是否含 BOSS 岗位（决定要不要 BOSS 登录态）"""
+    if job_ids:
+        return any((db.get_job(i) or {}).get("source", "boss") != "liepin" for i in job_ids)
+    f = dict(filters or {})
+    f["has_detail"] = "0"
+    if not f.get("status"):
+        f["status"] = "active"
+    _, rows = db.query_jobs({**f, "page": 1, "size": 40})
+    return any((j.get("source") or "boss") != "liepin" for j in rows)
 
 
 # ---------- 城市库 ----------
@@ -686,6 +724,65 @@ def api_cities_sync_state():
 def api_stats(days: int = 14, source: str = ""):
     """看板聚合：source='' 全部 / 'boss' / 'liepin'"""
     return db.stats(max(7, min(days, 60)), source=(source or "").strip())
+
+
+@app.get("/api/skills/gap")
+def api_skills_gap(source: str = "", min_jobs: int = 3):
+    """技能缺口：岗位要什么、我有什么、差什么"""
+    return db.skill_gap(source=(source or "").strip(), min_jobs=max(1, min(int(min_jobs), 20)))
+
+
+@app.get("/api/conversion")
+def api_conversion(by: str = "source", source: str = ""):
+    """投递转化分析：by=source/scale/keyword/city/degree"""
+    return db.conversion(by=(by or "source"), source=(source or "").strip())
+
+
+@app.get("/api/schedule")
+def api_schedule(days: int = 14):
+    """跟进日程：未来 N 天的面试/沟通安排"""
+    d = max(1, min(int(days), 90))
+    return {"days": d, "rows": db.schedule(d)}
+
+
+class NextAtIn(BaseModel):
+    job_id: str = ""
+    at: str = ""
+    note: str = ""
+
+
+@app.post("/api/next_at")
+def api_next_at(body: NextAtIn):
+    if not body.job_id:
+        return {"ok": False, "msg": "缺少 job_id"}
+    n = db.set_next_at(body.job_id, body.at, body.note)
+    return {"ok": bool(n), "msg": "已更新跟进时间" if body.at else "已清除跟进时间"}
+
+
+class BulkIn(BaseModel):
+    job_ids: list = []
+    action: str = ""
+    value: str = ""
+
+
+@app.post("/api/bulk")
+def api_bulk(body: BulkIn):
+    """批量操作：收藏/阶段/已回复（不含投递，投递有单独的串行队列）"""
+    n = db.bulk_update(body.job_ids, body.action, body.value)
+    label = {"star": "收藏", "stage": "求职阶段", "replied": "HR 已回复"}.get(body.action, "操作")
+    return {"ok": n > 0, "count": n, "msg": f"已批量更新{label} {n} 条" if n else "没有更新的记录"}
+
+
+@app.post("/api/backup")
+def api_backup():
+    p = db.backup()
+    return {"ok": bool(p), "msg": f"已备份到 {p}" if p else "备份失败", "path": p}
+
+
+@app.get("/api/liepin_cities")
+def api_liepin_cities():
+    """猎聘支持的城市（配置页用来标注哪些城市能抓猎聘）"""
+    return {"cities": sorted(liepin.CITY_CODE.keys())}
 
 
 @app.get("/api/details_status")
@@ -1113,6 +1210,7 @@ def api_map(source: str = ""):
     lngs = [p["lng"] for p in pts]
     lats = [p["lat"] for p in pts]
     return {"points": pts, "source": src,
+            "approx": sum(1 for p in pts if p.get("coord_approx")),
             "no_coord": db.no_coord_stats().get(src, 0) if src else sum(db.no_coord_stats().values()),
             "center": [sum(lats) / len(lats), sum(lngs) / len(lngs)] if pts else [24.5, 118.1],
             "bounds": [min(lats), min(lngs), max(lats), max(lngs)] if pts else None}
