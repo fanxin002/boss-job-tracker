@@ -865,6 +865,32 @@ def main():
     exp_lp = client.get("/api/export?source=liepin").text
     check("平台-导出source列+透传", "source" in exp_lp.splitlines()[0]
           and "liepin" in exp_lp, exp_lp.count("\n") - 1)
+
+    # ---- 平台维度：看板筛选 / 地图筛选 / 回复支持范围 / 匹配分重算 ----
+    _st_all = client.get("/api/stats").json()
+    _st_lp = client.get("/api/stats?source=liepin").json()
+    _st_b = client.get("/api/stats?source=boss").json()
+    check("看板-平台筛选总数可加总", _st_all["total"] == _st_b["total"] + _st_lp["total"],
+          f'{_st_all["total"]}={_st_b["total"]}+{_st_lp["total"]}')
+    check("看板-猎聘筛选只剩猎聘", _st_lp["total"] >= 1
+          and all(c["label"] == "厦门" for c in _st_lp["cities"]), str(_st_lp["cities"][:2]))
+    check("看板-返回各平台条数", (_st_all.get("by_source") or {}).get("liepin") == _st_lp["total"])
+    _mp_lp = client.get("/api/map?source=liepin").json()
+    _mp_all = client.get("/api/map").json()
+    check("地图-平台筛选+缺坐标说明", _mp_lp["source"] == "liepin" and _mp_lp["points"] == []
+          and _mp_lp["no_coord"] >= 1, f'lp={len(_mp_lp["points"])} no_coord={_mp_lp["no_coord"]}')
+    check("地图-全部平台含BOSS点位", len(_mp_all["points"]) >= 1 and _mp_all["source"] == "")
+    _rp = client.get("/api/replies").json()
+    check("回复-标注平台支持范围（猎聘不支持）",
+          _rp.get("sync_supported") == {"boss": True, "liepin": False}, str(_rp.get("sync_supported")))
+    # 匹配分：入库后自动重算（此前只在画像更新时算，导致新岗位全是 0）
+    _c = db.conn()
+    _c.execute("UPDATE jobs SET match_score=0 WHERE job_id='lp1974831551'")
+    _c.commit(); _c.close()
+    _appm._rescore()
+    check("匹配-重算后不再为0", (db.get_job("lp1974831551") or {}).get("match_score", 0) > 0,
+          (db.get_job("lp1974831551") or {}).get("match_score"))
+
     # 清理：删猎聘测试行，恢复猎聘风控/预算为干净态
     _cl = db.conn(); _cl.execute("DELETE FROM jobs WHERE source='liepin'"); _cl.commit(); _cl.close()
     db.clear_risk(source="liepin")
