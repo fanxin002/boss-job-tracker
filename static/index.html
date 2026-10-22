@@ -1597,7 +1597,7 @@ async function loadJobs(p){
       <td><a class="job-title" onclick="openJob('${esc(j.job_id)}')" title="点击查看详情（备注 / 求职阶段 / 完整描述）">${esc(j.job_name)}</a><a class="ext" href="${esc(j.job_url)}" target="_blank" title="到原网站打开该岗位" onclick="event.stopPropagation()">↗</a> ${dup}<div class="muted">${esc(j.keyword||'')}${j.industry?' / '+esc(j.industry):''}</div></td>
       <td>${j.salary?`<span class="tag tag-sal">${esc(j.salary)}</span>`:'<span class="muted">未知</span>'}</td>
       <td><span class="score ${score>=70?'hi':''}" title="本地规则打分：技能命中 / 薪资 / 学历">${score}</span></td>
-      <td>${esc(j.company)}<div class="muted">${esc(j.scale||'')}</div>${j.boss_name?`<div class="muted">HR ${esc(j.boss_name)}${j.boss_title?'（'+esc(j.boss_title)+'）':''}</div>`:''}</td>
+      <td>${esc(j.company)}${(j.company||'').startsWith('某')?'<span class="tag tag-off" title="猎聘对猎头代招职位脱敏，真实雇主名平台不公开">保密</span>':''}${j.gold_hunter===1?'<span class="tag" title="猎头代招职位（非企业直招）">猎头</span>':''}<div class="muted">${esc(j.scale||'')}</div>${j.boss_name?`<div class="muted">HR ${esc(j.boss_name)}${j.boss_title?'（'+esc(j.boss_title)+'）':''}</div>`:''}</td>
       <td>${tags.join('<br>')||'<span class="muted">无</span>'}</td>
       <td>${esc(locText(j.city_name,j.area_district))}<div class="muted">${esc(j.business_district||'')}${j.lng?` <a class="maplink" onclick="openMap('${esc(j.job_id)}')" title="在内置地图查看公司位置">📍地图</a>`:''}</div></td>
       <td>${det}</td>
@@ -1652,7 +1652,10 @@ async function openJob(jid){
   document.getElementById('jobMeta').innerHTML=[
     `${platIcon(j.source,'lg')}<span class="muted">${(j.source||'boss')==='liepin'?'猎聘':'BOSS直聘'}</span>`,
     j.salary?`<span class="tag tag-sal">${esc(j.salary)}</span>`:'<span class="muted">薪资未知</span>',
-    esc(j.company||''),esc(locText(j.city_name,j.area_district)),
+    esc(j.company||''),
+    (j.company||'').startsWith('某')
+      ?'<span class="tag tag-off" title="猎聘对猎头代招职位做了脱敏，真实雇主名平台不公开">保密雇主</span>':'',
+    esc(locText(j.city_name,j.area_district)),
     j.lng?`<a class="maplink" onclick="openMap('${esc(j.job_id)}')">📍 公司位置</a>`:'',
     esc(j.experience||''),esc(j.degree||''),esc(j.scale||''),
     j.boss_name?`<span class="muted">HR ${esc(j.boss_name)}${j.boss_title?'（'+esc(j.boss_title)+'）':''}</span>`:'',
