@@ -9,7 +9,7 @@
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
 ![SQLite](https://img.shields.io/badge/SQLite-%E6%9C%AC%E5%9C%B0%E5%AD%98%E5%82%A8-003B57?logo=sqlite&logoColor=white)
-![Tests](https://img.shields.io/badge/e2e-238%2F238-brightgreen)
+![Tests](https://img.shields.io/badge/e2e-248%2F248-brightgreen)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
 
 
@@ -36,6 +36,8 @@ flowchart LR
 - 多关键词 × 多城市（内置 373 城字典，可从 BOSS 同步），离屏静默运行不打扰日常用电脑
 - 页间随机节流、分段冷却、每日请求预算；触发风控自动熔断上锁，code=37 自动降温重试
 - 重复获取只刷新不重复入库；薪资「空值不覆盖」保护，历史数据不会被抹掉
+- **获取进度可观测**：点「立即获取」后弹进度条，显示当前平台 / 关键词·城市·第几页 / 已抓·新增·下线；可「后台运行」不打断，「查看日志」看明细
+- **登录判定以 Cookie 为准**：BOSS 的登录凭据是 `wt2`（游客态能搜列表但拿不到 `wt2`）。状态文件与 Cookie 不一致时自动纠正为「未登录」，并在获取前直接拦截提示，不会白跑一轮浏览器
 - **双平台统一入口**：BOSS直聘 + 猎聘，配置页「平台开关」各管各的——点一次「立即获取」/ 每日定时都会按开关顺序跑所有启用平台（BOSS 轮结束自动错峰再跑猎聘）。关键词、城市、页数、定时、浏览器模式两平台共用一份配置；登录态 / 浏览器实例 / 风控锁 / 请求预算仍完全隔离
 
 **筛选与匹配**
@@ -100,7 +102,7 @@ boss-job-tracker/
 ├── salary.py           # 薪资文本 → 数值解析
 ├── resume.py           # 简历解析 + 技能词典 + 匹配分计算
 ├── push.py             # PushPlus 微信推送
-├── e2e_test.py         # 238 项端到端回归测试（离线，monkeypatch 模拟浏览器）
+├── e2e_test.py         # 248 项端到端回归测试（离线，monkeypatch 模拟浏览器）
 ├── selftest.py         # 轻量自检
 ├── start.bat           # Windows 一键启动
 ├── requirements.txt
@@ -157,7 +159,7 @@ boss-job-tracker/
 
 ```bash
 python e2e_test.py
-# ===== 238/238 PASSED =====
+# ===== 248/248 PASSED =====
 ```
 
 离线回归：monkeypatch 模拟浏览器与接口返回，覆盖入库/去重/薪资空值保护/筛选/排序/超期口径/匹配分/投递状态机/风控熔断/预算/地图/看板聚合/**平台隔离与平台筛选**等。

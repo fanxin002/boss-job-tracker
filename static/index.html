@@ -322,6 +322,14 @@
     z-index:40;padding:24px}
   .mask.show{display:flex}
   .modal{background:var(--canvas);border:1px solid var(--hairline-strong);max-width:600px;width:100%;padding:32px}
+  /* 获取进度弹窗 */
+  .modal.prog{max-width:520px}
+  .progbar{height:10px;background:#eeeef1;border-radius:999px;overflow:hidden;margin:18px 0 10px}
+  .progbar i{display:block;height:100%;width:2%;background:var(--primary);border-radius:999px;
+    transition:width .5s ease}
+  .progline{display:flex;justify-content:space-between;align-items:baseline;font-size:13px;color:var(--body)}
+  .progline b{font-size:20px;color:var(--ink);font-variant-numeric:tabular-nums}
+  .progmeta{margin-top:10px;font-size:12px;color:var(--muted);line-height:1.6;min-height:34px}
   .modal h3{font-size:16px;font-weight:700;letter-spacing:.2px;color:var(--ink);margin-bottom:16px;padding-bottom:14px;
     border-bottom:1px solid var(--hairline)}
   .modal .body{font-size:14px;font-weight:400;color:var(--body);line-height:1.7;max-height:60vh;overflow:auto}
@@ -822,6 +830,19 @@
   </div>
 </div>
 
+<div class="mask" id="progMask">
+  <div class="modal prog">
+    <h3 id="progTitle">获取中…</h3>
+    <div class="progbar"><i id="progFill"></i></div>
+    <div class="progline"><span id="progStage">准备浏览器</span><b id="progPct">0%</b></div>
+    <div class="progmeta" id="progMeta"></div>
+    <div class="foot">
+      <button class="btn btn-sm" onclick="hideProgress()">后台运行</button>
+      <button class="btn btn-sm" onclick="showLog((lastRunId||0))">查看日志</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -1087,7 +1108,10 @@ async function startCrawl(){
   if(plats.includes('boss')){
     if(risk.active){toast('BOSS 风控冷却中，约 '+risk.remaining_min+' 分钟后解除');refreshRisk();return}
     const st=await getLoginState();
-    if(!st.logged&&!st.login_open){toast('BOSS 未登录，请先点「登录 / 修复」');return}
+    if(!st.logged&&!st.login_open){
+      toast('BOSS 还没真正登录（Cookie 无 wt2）：正在打开登录窗口…');
+      platformLogin('boss');return;
+    }
   }
   const lpBlocked=plats.includes('liepin')&&risk.liepin&&risk.liepin.active;
   if(lpBlocked&&plats.length===1){toast('猎聘冷却中，'+(risk.liepin.until||'').slice(11,16)+' 后再试');refreshRisk();return}
@@ -1115,11 +1139,54 @@ async function startCrawl(){
   if(!dlg.ok)return;
   const r=await(await fetch('/api/crawl',{method:'POST'})).json();
   toast(r.msg);
-  if(r.ok){pollStatus();setTimeout(async()=>{
-    try{const runs=await(await fetch('/api/runs')).json();
-      const list=runs.runs||runs;const lr=list.find?list[0]:null;
-      if(lr&&lr.id)showLog(lr.id);}catch(e){}
-  },1800);}else refreshRisk();
+  if(r.ok){showProgress();pollStatus();}
+  else{refreshRisk();if(r.need_login)platformLogin('boss');}
+}
+/* ========== 获取进度弹窗 ========== */
+let progTimer=null,lastRunId=0;
+function showProgress(){
+  document.getElementById('progMask').classList.add('show');
+  document.getElementById('progTitle').textContent='获取中…';
+  document.getElementById('progFill').style.width='2%';
+  document.getElementById('progStage').textContent='准备浏览器';
+  document.getElementById('progPct').textContent='0%';
+  document.getElementById('progMeta').textContent='';
+  clearInterval(progTimer);
+  progTimer=setInterval(tickProgress,1200);
+  tickProgress();
+}
+function hideProgress(){
+  document.getElementById('progMask').classList.remove('show');
+  clearInterval(progTimer);progTimer=null;
+}
+async function tickProgress(){
+  let s={};
+  try{s=await(await fetch('/api/status')).json()}catch(e){return}
+  const p=s.progress||{},lr=s.last_run||{};
+  if(lr.id)lastRunId=lr.id;
+  const pct=p.total?Math.round(p.done*100/p.total):(s.running?5:0);
+  const who={boss:'BOSS',liepin:'猎聘'}[p.platform]||'';
+  const t=document.getElementById('progTitle');
+  if(s.running){
+    t.textContent='获取中… '+(who?('['+who+']'):'');
+  }else{
+    t.textContent=lr.status==='error'?'获取失败':'获取完成';
+  }
+  document.getElementById('progFill').style.width=Math.max(2,Math.min(100,pct))+'%';
+  document.getElementById('progPct').textContent=pct+'%';
+  document.getElementById('progStage').textContent=p.stage||(s.running?'进行中':'已结束');
+  document.getElementById('progMeta').textContent=
+    `进度 ${p.done||0}/${p.total||0} 页 ｜ 本轮抓到 ${lr.fetched_count||0} 条（新增 ${lr.new_count||0}，下线 ${lr.offline_count||0}）`;
+  if(!s.running){
+    document.getElementById('progFill').style.width='100%';
+    document.getElementById('progPct').textContent='100%';
+    clearInterval(progTimer);progTimer=null;
+    setTimeout(()=>{
+      if(!document.getElementById('progMask').classList.contains('show'))return;
+      hideProgress();
+      if(lastRunId)showLog(lastRunId);
+    },1400);
+  }
 }
 function pollStatus(){
   clearInterval(polling);
@@ -2187,7 +2254,8 @@ function bindMapSeg(){
   document.getElementById('logMask').onclick=e=>{if(e.target.id==='logMask')closeLog()};
   document.getElementById('jobMask').onclick=e=>{if(e.target.id==='jobMask')closeJob()};
   document.getElementById('mapMask').onclick=e=>{if(e.target.id==='mapMask')closeMap()};
-  document.onkeydown=e=>{if(e.key==='Escape'){closeJob();closeLog();closeMap()}};
+  document.getElementById('progMask').onclick=e=>{if(e.target.id==='progMask')hideProgress()};
+  document.onkeydown=e=>{if(e.key==='Escape'){closeJob();closeLog();closeMap();hideProgress()}};
   const cc=document.getElementById('cfgCard');
   cc.addEventListener('input',markDirty);cc.addEventListener('change',e=>{markDirty();
     if(e.target&&(e.target.id==='cfgBossEnabled'||e.target.id==='cfgLiepinEnabled'||e.target.id==='cfgLiepinPages')){
