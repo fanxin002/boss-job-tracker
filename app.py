@@ -803,6 +803,13 @@ def api_skills_gap(source: str = "", min_jobs: int = 3):
     return db.skill_gap(source=(source or "").strip(), min_jobs=max(1, min(int(min_jobs), 20)))
 
 
+@app.get("/api/skills/salary")
+def api_skills_salary(source: str = "", min_jobs: int = 5):
+    """技能薪资分析：哪些技能在高薪岗位中更常见、薪资溢价多少（市场需求侧）"""
+    return db.skill_salary(source=(source or "").strip(),
+                           min_jobs=max(2, min(int(min_jobs), 30)))
+
+
 @app.get("/api/conversion")
 def api_conversion(by: str = "source", source: str = ""):
     """投递转化分析：by=source/scale/keyword/city/degree"""
