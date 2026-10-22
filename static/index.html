@@ -292,6 +292,20 @@
   .gbb i{display:block;height:100%;background:#111;border-radius:3px}
   .gtitle.warn+.gbrow .gbb i,.gapwrap>div:nth-child(2) .gbb i{background:#e8a33d}
   .gbn{flex:0 0 30px;text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
+  /* 技能薪资分析 */
+  .ssal{width:100%;border-collapse:collapse;font-size:12.5px}
+  .ssal th{text-align:left;color:var(--muted);font-weight:600;padding:6px 4px;border-bottom:1px solid var(--hairline);white-space:nowrap}
+  .ssal td{padding:6px 4px;border-bottom:1px solid #f6f6f7;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .ssal tr:last-child td{border-bottom:none}
+  .ssal .sk{color:var(--body);font-weight:600;white-space:normal}
+  .ssal .bar{display:block;height:6px;background:#ececef;border-radius:3px;overflow:hidden;min-width:60px}
+  .ssal .bar i{display:block;height:100%;border-radius:3px;background:#111}
+  .ssal .bar i.pos{background:#c92a2a}   /* 溢价为正：该技能岗位更贵（红=涨，符合国内习惯）*/
+  .ssal .bar i.neg{background:#2b8a3e}   /* 溢价为负：要求该技能的岗位反而更便宜 */
+  .ssal .pm{font-weight:600}
+  .ssal .pm.pos{color:#c92a2a}
+  .ssal .pm.neg{color:#2b8a3e}
+  .ssal .lift{color:#b45309}
   /* 转化 / 日程 */
   table.mini{width:100%;border-collapse:collapse;font-size:12px}
   table.mini th{text-align:left;color:var(--muted);font-weight:600;padding:6px 4px;border-bottom:1px solid var(--hairline)}
@@ -618,6 +632,17 @@
         <div class="dcard">
           <h3>技能缺口 <span class="right" id="dashGapSub"></span></h3>
           <div id="dashSkillGap"></div>
+        </div>
+        <div class="dcard">
+          <h3>技能薪资分析
+            <span class="seg" id="segSkillSal">
+              <button class="on" data-k="jobs">需求热度</button>
+              <button data-k="premium">薪资溢价</button>
+              <button data-k="lift">高薪偏好</button>
+            </span>
+          </h3>
+          <div class="dashnote" id="dashSkillSalNote"></div>
+          <div id="dashSkillSal"></div>
         </div>
         <div class="dcard">
           <h3>投递转化
@@ -2080,6 +2105,46 @@ async function loadSkillGap(){
     <div><div class="gtitle warn">岗位要 · 我缺</div>${gapRows(d.gap||[])}</div>
   </div>`;
 }
+/* ========== 技能薪资分析 ========== */
+let skillSalKey='jobs';
+function ssalSort(list,key){
+  const a=list.slice();
+  if(key==='jobs')a.sort((x,y)=>y.jobs-x.jobs);
+  else if(key==='premium')a.sort((x,y)=>(y.premium??-999)-(x.premium??-999));
+  else a.sort((x,y)=>(y.lift??0)-(x.lift??0));
+  return a;
+}
+async function loadSkillSalary(){
+  const box=document.getElementById('dashSkillSal');if(!box)return;
+  let d={skills:[]};
+  try{d=await(await fetch('/api/skills/salary'+(dashSource?'?source='+dashSource:''))).json()}catch(e){}
+  const note=document.getElementById('dashSkillSalNote');
+  if(note){
+    note.textContent=d.total?
+      `基于 ${d.known||0} 条有薪资在招岗 ｜ 高薪线 = 薪资≥${d.high_threshold}K（全体 P75）｜ 溢价 = 要求该技能 vs 不要求的薪资中位数差（相关性，非因果）`:'';
+  }
+  const list=ssalSort(d.skills||[],skillSalKey).slice(0,12);
+  if(!list.length){box.innerHTML='<div class="muted" style="padding:8px 0">样本不足（至少 5 个岗位提到同一技能才有统计意义）</div>';return}
+  const maxBar=Math.max(1,...list.map(x=>skillSalKey==='jobs'?x.jobs:(x.premium??0)));
+  box.innerHTML=`<table class="ssal"><thead><tr>
+      <th>技能</th><th>岗位数</th>${skillSalKey==='jobs'?'<th></th>':'<th>溢价</th>'}<th>薪资中位</th><th>高薪岗出现率</th><th title="高薪岗出现率 ÷ 整体出现率，>1 表示高薪岗更看重">偏好度</th>
+    </tr></thead><tbody>
+    ${list.map(x=>{
+      const pos=(x.premium??0)>=0;
+      const barW=skillSalKey==='jobs'?Math.max(3,Math.round(x.jobs*140/maxBar)):Math.max(3,Math.round(Math.abs(x.premium??0)*140/maxBar));
+      return `<tr title="${esc(x.skill)}：${x.jobs} 个岗位（${x.pct}%），薪资中位 ${x.salary}K，不要求的对照 ${x.base}K">
+      <td class="sk">${esc(x.skill)}</td>
+      <td>${x.jobs}</td>
+      <td>${skillSalKey==='jobs'
+        ?`<span class="bar"><i style="width:${barW}px"></i></span>`
+        :`<span class="bar"><i class="${pos?'pos':'neg'}" style="width:${barW}px"></i></span>
+          <span class="pm ${pos?'pos':'neg'}">${pos?'+':''}${x.premium}K</span>`}</td>
+      <td>${x.salary??'—'}K</td>
+      <td>${x.high_rate}%</td>
+      <td class="lift">${x.lift?('×'+x.lift):'—'}</td></tr>`;
+    }).join('')}
+    </tbody></table>`;
+}
 async function loadConv(){
   const box=document.getElementById('dashConv');if(!box)return;
   let d={rows:[]};
@@ -2143,7 +2208,7 @@ async function loadStats(){
   document.getElementById('dkDescSub').textContent=
     `已有 ${s.desc_done} 条，待补 ${s.total-s.desc_done} 条`+
     (s.proxy?` ｜ 代招 ${s.proxy}`:'');
-  loadSkillGap();loadConv();loadSchedule();
+  loadSkillGap();loadSkillSalary();loadConv();loadSchedule();
   renderDashMap();
 }
 function bindSeg(){
@@ -2167,6 +2232,14 @@ function bindSeg(){
       convBy=b.dataset.by||'source';
       document.querySelectorAll('#segConv button').forEach(x=>x.classList.toggle('on',x===b));
       loadConv();
+    };
+  });
+  // 技能薪资分析：需求热度 / 薪资溢价 / 高薪偏好
+  document.querySelectorAll('#segSkillSal button').forEach(b=>{
+    b.onclick=()=>{
+      skillSalKey=b.dataset.k||'jobs';
+      document.querySelectorAll('#segSkillSal button').forEach(x=>x.classList.toggle('on',x===b));
+      loadSkillSalary();
     };
   });
 }
