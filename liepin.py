@@ -296,3 +296,94 @@ def run_crawl(run_id, keywords, cities, pages, headless=False, offscreen=True):
         except Exception:
             pass
     return fetched, new_cnt, offline_cnt
+
+
+# 详情页取 JD / 福利 / 区县（实测：schema.org JobPosting 的 description 就是完整 JD；
+# 详情页没有经纬度，所以坐标只能靠 db.fill_approx_coords 的区级近似）
+DETAIL_JS = r"""
+var out={jd:'',area:'',welfare:''};
+var lds=document.querySelectorAll('script[type="application/ld+json"]');
+for(var i=0;i<lds.length;i++){
+  try{var o=JSON.parse(lds[i].textContent);
+    if(o&&o['@type']==='JobPosting'){out.jd=o.description||'';break;}
+  }catch(e){}
+}
+if(!out.jd){
+  var c=document.querySelector('.job-intro-container')||document.querySelector('.job-detail-box');
+  out.jd=c?(c.innerText||''):'';
+}
+var head=document.querySelector('.job-detail-header-box')||document.body;
+var t=(head.innerText||'').replace(/\s+/g,' ');
+var m=t.match(/[^\s]{2,4}-[^\s]{2,8}(?:区|县|市)/);
+out.area=m?m[0]:'';
+var tags=document.querySelectorAll('[class*=job-labels] span,[class*=welfare] span,[class*=labels] span');
+var ws=[];
+for(var k=0;k<tags.length;k++){
+  var x=(tags[k].innerText||'').trim();
+  if(x&&x.length<=8&&ws.indexOf(x)<0)ws.push(x);
+}
+out.welfare=ws.slice(0,10).join('|');
+return JSON.stringify(out);
+"""
+
+
+def parse_detail(text):
+    """详情页 JS 返回 → {jd, area, welfare}；解析失败返回空 dict"""
+    try:
+        d = json.loads(text or "{}")
+    except Exception:
+        return {}
+    jd = (d.get("jd") or "").strip()
+    # schema.org 的 description 可能带 HTML 实体/标签，统一压平
+    jd = re.sub(r"<[^>]+>", "\n", jd)
+    jd = jd.replace("&nbsp;", " ").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+    jd = re.sub(r"\n{3,}", "\n\n", jd).strip()
+    return {"jd": jd, "area": (d.get("area") or "").strip(),
+            "welfare": (d.get("welfare") or "").strip()}
+
+
+def run_details(jobs, logf, interval=(3, 6), should_cancel=None, on_progress=None):
+    """批量补抓猎聘详情（JD + 福利 + 区县）。返回 (ok, fail)。"""
+    import random
+    ok = fail = 0
+    if not jobs:
+        return 0, 0
+    page = _ensure_liepin_browser(headless=True, offscreen=True)
+    total = len(jobs)
+    try:
+        for i, j in enumerate(jobs, 1):
+            if should_cancel and should_cancel():
+                logf("⏹ 已取消，剩余猎聘岗位未抓")
+                break
+            url = j.get("job_url") or ""
+            if not url:
+                fail += 1
+                continue
+            try:
+                page.get(url)
+                time.sleep(random.uniform(2.0, 3.2))
+                data = parse_detail(page.run_js(DETAIL_JS) or "")
+                if data.get("jd"):
+                    area = data.get("area") or ""
+                    if area.startswith((j.get("city_name") or "") + "-"):
+                        area = area[len(j.get("city_name") or "") + 1:]
+                    db.set_detail(j["job_id"], data["jd"], data.get("welfare") or None,
+                                  area or None)
+                    ok += 1
+                    logf(f"  [{i}/{total}] ✅ {j.get('job_name','')[:18]}（{len(data['jd'])}字）")
+                else:
+                    fail += 1
+                    logf(f"  [{i}/{total}] ⚠️ {j.get('job_name','')[:18]}：未取到 JD（页面结构变化/已下架）")
+            except Exception as e:
+                fail += 1
+                logf(f"  [{i}/{total}] ⚠️ 抓取异常：{str(e)[:60]}")
+            if on_progress:
+                on_progress(i, total)
+            if i < total:
+                time.sleep(random.uniform(*interval))
+    finally:
+        try:
+            crawler._close_browser(slot="liepin")
+        except Exception:
+            pass
+    return ok, fail
