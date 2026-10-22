@@ -118,12 +118,23 @@ _JB_NOISE = ("急聘", "急招", "高薪", "双休", "包吃住", "五险一金"
              "（", "）", "(", ")", "【", "】", "/", "-", "—", " ", "　", "·")
 
 
-def dedupe_key(company, job_name):
+def is_masked_company(company):
+    """猎聘「保密招聘（猎头代招）」的公司名是脱敏的：「某知名公司」「某大型新零售公司」。
+    这类行不能按公司名做同岗合并，否则会把不同雇主的岗位错误合并。"""
+    c = (company or "").strip()
+    return bool(c) and (c.startswith("某") or "保密" in c)
+
+
+def dedupe_key(company, job_name, job_id=""):
     """同岗合并键：公司名 + 岗位名归一（供 GROUP BY 用）。
 
     括号里的内容（分公司/门店/城市分支、「急聘」这类前缀）整段丢掉，
     否则「甲公司(厦门)」和「甲公司」会算出两个键。
+    脱敏公司名（某…）没有可比性 → 用 job_id 兜底，保证各算各的、绝不误合。
     """
+    if is_masked_company(company):
+        return f"secret|{job_id}" if job_id else ""
+
     def clean(s, noise):
         s = re.sub(r"[（(][^）)]*[）)]", "", s or "")   # 去括号及内容
         s = s.lower()
@@ -211,16 +222,16 @@ def _migrate(c):
     if "dedupe_key" in added:   # 首次加列：给存量行算一遍，否则前端「同岗合并」全是空键
         for r in c.execute("SELECT job_id, company, job_name FROM jobs").fetchall():
             c.execute("UPDATE jobs SET dedupe_key=? WHERE job_id=?",
-                      (dedupe_key(r["company"], r["job_name"]), r["job_id"]))
-    # 归一算法升级（v2 起连括号内容一起丢）：版本不一致就整体重算一次
+                      (dedupe_key(r["company"], r["job_name"], r["job_id"]), r["job_id"]))
+    # 归一算法升级（v2 去括号内容；v3 起脱敏公司名不合并）：版本不一致就整体重算一次
     try:
         ver = c.execute("SELECT value FROM config WHERE key='dedupe_key_ver'").fetchone()
-        if not ver or ver["value"] != "2":
+        if not ver or ver["value"] != "3":
             for r in c.execute("SELECT job_id, company, job_name FROM jobs").fetchall():
                 c.execute("UPDATE jobs SET dedupe_key=? WHERE job_id=?",
-                          (dedupe_key(r["company"], r["job_name"]), r["job_id"]))
-            c.execute("INSERT INTO config(key,value) VALUES('dedupe_key_ver','2') "
-                      "ON CONFLICT(key) DO UPDATE SET value='2'")
+                          (dedupe_key(r["company"], r["job_name"], r["job_id"]), r["job_id"]))
+            c.execute("INSERT INTO config(key,value) VALUES('dedupe_key_ver','3') "
+                      "ON CONFLICT(key) DO UPDATE SET value='3'")
     except Exception:
         pass
     rcols = {r["name"] for r in c.execute("PRAGMA table_info(runs)")}
@@ -330,7 +341,8 @@ def upsert_jobs(rows, run_id):
                 1 if j.get("proxy_job") else 0, 1 if j.get("gold_hunter") else 0,
                 j.get("encrypt_brand_id", ""), j.get("boss_avatar", ""),
                 j.get("source") or "boss",
-                j.get("dedupe_key") or dedupe_key(j.get("company"), j.get("job_name")),
+                j.get("dedupe_key") or dedupe_key(j.get("company"), j.get("job_name"),
+                                                  j.get("job_id")),
             ]
             c.execute(UPSERT_SQL, params)
         c.commit()
