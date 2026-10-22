@@ -6,9 +6,9 @@ TOKEN = os.environ.get("GH_TOKEN", "")
 OWNER, REPO, BRANCH = "fanxin002", "boss-job-tracker", "main"
 API = f"https://api.github.com/repos/{OWNER}/{REPO}/contents"
 ROOT = os.path.dirname(os.path.abspath(__file__))
-FILES = ["README.md", "static/index.html", "app.py", "liepin.py",
+FILES = ["README.md", "static/index.html", "app.py", "db.py",
          "e2e_test.py", "push_gh.py"]
-MSG = "feat: liepin full city sync (get-all-dq -> liepin_cities.json), same as BOSS cities.json"
+MSG = "feat: skill-salary analysis - which skills matter in high-paying jobs (demand/premium/lift)"
 
 
 def req(url, data=None, method=None):
