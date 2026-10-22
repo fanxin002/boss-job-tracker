@@ -896,12 +896,82 @@ def main():
     check("匹配-重算后不再为0", (db.get_job("lp1974831551") or {}).get("match_score", 0) > 0,
           (db.get_job("lp1974831551") or {}).get("match_score"))
 
+    # ---- 新增能力：同岗归一 / 技能缺口 / 转化 / 日程 / 批量 / 备份 / 城市 / 近似坐标 / 猎聘详情 ----
+    check("去重-公司名归一后键相同",
+          db.dedupe_key("瀚天天成电子科技(厦门)股份有限公司", "数据分析师（急聘）")
+          == db.dedupe_key("瀚天天成电子科技", "数据分析师"))
+    db.upsert_jobs([{**mk("DZ1"), "company": "甲公司有限公司", "job_name": "数据分析师（急聘）"},
+                    {**mk("DZ2"), "company": "甲公司", "job_name": "数据分析师"}], rid3)
+    _, _dzrows = db.query_jobs({"dedupe": "1", "page": 1, "size": 300})
+    _dz = [r for r in _dzrows if r["job_id"] in ("DZ1", "DZ2")]
+    check("去重-跨写法同岗合并为1条", len(_dz) == 1 and _dz[0].get("dup_count") == 2, str(len(_dz)))
+
+    gp = client.get("/api/skills/gap").json()
+    check("技能缺口-接口结构", gp["total"] >= 1 and "gap" in gp and "have" in gp, str(gp.get("total")))
+    check("技能缺口-只统计达到阈值的技能", all(x["jobs"] >= 3 for x in gp["gap"]))
+    check("技能缺口-带平台筛选", client.get("/api/skills/gap?source=boss").json()["total"] >= 1)
+
+    cv = client.get("/api/conversion?by=source").json()
+    check("转化-按平台分组", cv["by"] == "source" and len(cv["rows"]) >= 1, str(cv.get("rows"))[:60])
+    check("转化-支持其他维度", client.get("/api/conversion?by=keyword").json()["by"] == "keyword")
+
+    from datetime import date as _d, timedelta as _td
+    _soon = (_d.today() + _td(days=2)).strftime("%Y-%m-%d 10:00")
+    check("日程-写入", client.post("/api/next_at", json={"job_id": "A", "at": _soon, "note": "二面"}).json()["ok"])
+    _sc = client.get("/api/schedule?days=14").json()["rows"]
+    check("日程-按时间取出", any(r["job_id"] == "A" and r["next_note"] == "二面" for r in _sc))
+    client.post("/api/next_at", json={"job_id": "A", "at": ""})
+    check("日程-清除后不再出现",
+          not any(r["job_id"] == "A" for r in client.get("/api/schedule?days=14").json()["rows"]))
+
+    _bl = client.post("/api/bulk", json={"job_ids": ["A", "B"], "action": "star", "value": "1"}).json()
+    check("批量-收藏", _bl["ok"] and _bl["count"] == 2 and db.get_job("A")["starred"] == 1)
+    _bl2 = client.post("/api/bulk", json={"job_ids": ["A", "B"], "action": "stage",
+                                         "value": "interview"}).json()
+    check("批量-阶段", _bl2["ok"] and db.get_job("B")["stage"] == "interview")
+    check("批量-非法阶段被拒",
+          client.post("/api/bulk", json={"job_ids": ["A"], "action": "stage", "value": "bad"}).json()["ok"] is False)
+    client.post("/api/bulk", json={"job_ids": ["A", "B"], "action": "star", "value": "0"})
+    check("批量-空列表不报错", client.post("/api/bulk", json={"job_ids": [], "action": "star"}).json()["ok"] is False)
+
+    _orig_data = db.DATA_DIR
+    db.DATA_DIR = os.path.join(BASE, "data", "_bk_test")
+    _bp = client.post("/api/backup").json()
+    _bk_ok = _bp["ok"] and os.path.exists(_bp["path"]) and "_bk_test" in _bp["path"]
+    db.DATA_DIR = _orig_data
+    check("备份-生成文件", _bk_ok, str(_bp.get("path", ""))[-30:])
+
+    _lc = client.get("/api/liepin_cities").json()
+    check("猎聘-城市码列表", "厦门" in _lc["cities"] and len(_lc["cities"]) >= 10)
+
+    # 猎聘无坐标 → 用同城同区 BOSS 坐标补近似点
+    db.upsert_jobs([{**mk("LPAPX"), "job_id": "lpAPX", "source": "liepin", "lng": "", "lat": ""}], rid3)
+    _na = db.fill_approx_coords("liepin")
+    _apj = db.get_job("lpAPX")
+    check("地图-猎聘补区级近似坐标",
+          (_na["district"] + _na["city"]) >= 1 and _apj["coord_approx"] == 1
+          and _apj["lng"] not in ("", None), f'{_na} {_apj["lng"]}')
+    _mp2 = client.get("/api/map?source=liepin").json()
+    check("地图-返回近似点计数", _mp2["approx"] >= 1 and len(_mp2["points"]) >= 1)
+
+    import liepin as _lpmod
+    _pd = _lpmod.parse_detail(json.dumps({"jd": "<p>要求 SQL 与 Excel</p>&amp;报表",
+                                         "area": "厦门-思明区", "welfare": "五险一金"}))
+    check("猎聘-详情解析去 HTML 标签", "SQL" in _pd["jd"] and "<p>" not in _pd["jd"] and "&amp;" not in _pd["jd"])
+    check("猎聘-详情解析区县/福利", _pd["area"] == "厦门-思明区" and _pd["welfare"] == "五险一金")
+    check("补抓-只有猎聘时不需要 BOSS 登录",
+          _appm._pending_has_boss([], {"source": "liepin"}) is False)
+
     # 清理：删猎聘测试行，恢复猎聘风控/预算为干净态
     _cl = db.conn(); _cl.execute("DELETE FROM jobs WHERE source='liepin'"); _cl.commit(); _cl.close()
     db.clear_risk(source="liepin")
     _cl = db.conn()
     _cl.execute("UPDATE config SET value='' WHERE key IN ('quota_date_liepin','quota_used_liepin')")
     _cl.commit(); _cl.close()
+    _bkdir = os.path.join(BASE, "data", "_bk_test")
+    if os.path.isdir(_bkdir):
+        import shutil as _sh
+        _sh.rmtree(_bkdir, ignore_errors=True)
 
     # ---- 汇总 ----
     passed = sum(1 for s, *_ in RESULTS if s == "PASS")
