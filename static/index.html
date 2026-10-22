@@ -60,6 +60,22 @@
   .nav-status{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);margin-right:6px}
   .dot{width:6px;height:6px;border-radius:50%;background:var(--muted-soft);display:inline-block}
   .dot.ok{background:var(--success)} .dot.run{background:var(--warning)} .dot.err{background:var(--error)}
+  /* 平台登录状态：一个平台一个胶囊，点击即登录该平台 */
+  .platlogin{display:flex;gap:6px;align-items:center;margin-right:4px}
+  .pchip{display:flex;align-items:center;gap:6px;height:28px;padding:0 10px;border:1px solid var(--hairline);
+    background:var(--canvas);font-size:12px;color:var(--muted);cursor:pointer;white-space:nowrap}
+  .pchip b{color:var(--ink);font-weight:700}
+  .pchip:hover{border-color:var(--ink)}
+  .pchip.on{border-color:var(--success);background:#f4fbf6}
+  .pchip.on b,.pchip.on span{color:var(--ink)}
+  .pchip.busy{border-color:var(--warning);background:#fffaf0}
+  .pchip .taglp{font-size:10px;padding:1px 4px;background:#fff3e6;color:#b45309;border:1px solid #f6d9b8}
+  /* 看板平台筛选条 */
+  .dashbar{display:flex;align-items:center;gap:12px;font-size:13px;color:var(--muted)}
+  .dashbar .seg{margin-left:0}
+  .dashnote{font-size:12px;color:#b45309;background:#fffaf0;border:1px solid #f6d9b8;padding:8px 12px;
+    line-height:1.6;margin-top:10px;display:none}
+  .dashnote.show{display:block}
 
   /* ---------- 按钮 ---------- */
   button{border-radius:0;cursor:pointer;transition:background .12s,border-color .12s,color .12s;white-space:nowrap}
@@ -325,13 +341,18 @@
       <a id="nav-config" onclick="switchView('config')">获取配置</a>
     </nav>
     <div class="nav-actions">
-      <span class="nav-status"><span class="dot" id="dotLogin"></span><span id="loginState">未登录</span></span>
+      <div class="platlogin" title="点平台名可直接登录该平台（登录态各自独立保存）">
+        <span class="pchip" id="chipBoss" onclick="platformLogin('boss')">
+          <span class="dot" id="dotLogin"></span><b>BOSS</b><span id="loginState">未登录</span>
+        </span>
+        <span class="pchip" id="chipLp" onclick="platformLogin('liepin')">
+          <span class="dot" id="dotLp"></span><b>猎聘</b><span id="loginLpState">未登录</span>
+        </span>
+      </div>
       <span class="nav-status"><span class="dot" id="dotRun"></span><span id="runStatus">空闲</span></span>
-      <button class="btn btn-sm" id="btnLogin" onclick="doRepair()">登录 / 修复</button>
       <button class="btn btn-sm" id="btnCancelLogin" style="display:none" onclick="cancelRepair()">取消</button>
-      <button class="btn btn-sm" id="btnLpLogin" onclick="lpLogin()" title="弹出猎聘登录窗口（独立登录态）">登录猎聘</button>
       <button class="btn btn-sm" onclick="exportCsv()">导出 CSV</button>
-      <button class="btn btn-sm" id="btnReply" onclick="syncReplies()">同步回复</button>
+      <button class="btn btn-sm" id="btnReply" onclick="syncReplies()" title="只同步 BOSS 会话；猎聘不支持自动同步（用岗位详情里的手动标记）">同步回复 BOSS</button>
       <button class="btn btn-sm" id="btnDetails" onclick="startDetails()">补抓描述</button>
       <button class="btn-primary btn-sm" id="btnCrawl" onclick="startCrawl()">立即获取</button>
     </div>
@@ -469,6 +490,15 @@
 
     <div id="view-dash" style="display:none">
       <div class="dash">
+        <div class="dashbar">
+          <span>平台筛选</span>
+          <span class="seg" id="segSource">
+            <button class="on" data-s="">全部</button>
+            <button data-s="boss">BOSS</button>
+            <button data-s="liepin">猎聘</button>
+          </span>
+          <span id="dashSourceHint"></span>
+        </div>
         <div class="dkpis">
           <div class="dk"><div class="lb">岗位总数</div><b id="dkTotal">0</b>
             <div class="dt" id="dkTotalSub">在招 0 / 下线 0</div></div>
@@ -520,6 +550,7 @@
             <span><i style="background:#bdbdbd"></i>已下线</span>
             <span><i style="background:#c92a2a"></i>已投递</span>
           </div>
+          <div class="dashnote" id="dashMapNote"></div>
           <div id="dashMap"></div>
         </div>
       </div>
@@ -896,11 +927,11 @@ function platWarnHint(){
   const msgs=[];
   if(PLAT_STATE.includes('boss')){
     const d=document.getElementById('dotLogin');
-    if(d&&!d.classList.contains('ok'))msgs.push('BOSS 未登录：先点顶部「登录 / 修复」');
+    if(d&&!d.classList.contains('ok'))msgs.push('BOSS 未登录：点顶部「BOSS」胶囊登录');
   }
   if(PLAT_STATE.includes('liepin')){
-    const b=document.getElementById('btnLpLogin');
-    if(b&&b.textContent!=='猎聘已登录')msgs.push('猎聘未登录：建议点顶部「登录猎聘」（不登录也能跑，结果可能不全）');
+    const d=document.getElementById('dotLp');
+    if(d&&!d.classList.contains('ok'))msgs.push('猎聘未登录：点顶部「猎聘」胶囊登录（不登录也能跑，结果可能不全）');
   }
   el.innerHTML=msgs.length?'<div class="note">'+msgs.join('；')+'。</div>':'';
 }
@@ -1003,6 +1034,7 @@ function pollStatus(){
       setRunState(lbl,'run');btnCrawl.disabled=true;
     }
     else{setRunState('空闲','ok');btnCrawl.disabled=false;clearInterval(polling);
+      clearMapCache();          // 新岗位有新坐标，地图缓存必须失效
       refreshFilters();loadJobs(1);loadRuns();refreshRisk();refreshStats();
       if(curView==='dash')loadStats();}
   },3000);
@@ -1025,15 +1057,40 @@ function closeLog(){clearInterval(logTimer);logTimer=null;document.getElementByI
 
 /* ========== 登录 / 风控 ========== */
 let loginTimer=null,repairTimer=null;
+const PLAT_NAME={boss:'BOSS',liepin:'猎聘'};
+function paintLoginChip(p,st){
+  const chip=document.getElementById(p==='boss'?'chipBoss':'chipLp');
+  const dot=document.getElementById(p==='boss'?'dotLogin':'dotLp');
+  const lb=document.getElementById(p==='boss'?'loginState':'loginLpState');
+  if(!chip||!dot||!lb)return;
+  const busy=!!st.login_open;
+  lb.textContent=busy?'登录中…':(st.logged?'已登录':'未登录');
+  dot.className='dot '+(busy?'run':(st.logged?'ok':''));
+  chip.classList.toggle('on',!!st.logged);
+  chip.classList.toggle('busy',busy);
+  chip.title=busy?`${PLAT_NAME[p]} 登录窗口已打开，请在窗口内完成登录`
+    :(st.logged?`${PLAT_NAME[p]} 已登录，点击可重新登录/修复`
+               :`${PLAT_NAME[p]} 未登录，点击登录`);
+  if(p==='liepin')chip.title+='（猎聘免登录也能搜，登录后结果更全）';
+}
 async function getLoginState(){
-  const st=await(await fetch('/api/login_state')).json();
-  document.getElementById('loginState').textContent=st.login_open?'登录中':(st.logged?'已登录':'未登录');
-  document.getElementById('dotLogin').className='dot '+(st.logged?'ok':'');
-  document.getElementById('btnLogin').style.display=st.login_open?'none':'';
-  document.getElementById('btnCancelLogin').style.display=st.login_open?'':'none';
-  if(st.login_open&&!loginTimer)loginTimer=setInterval(getLoginState,2500);
-  if(!st.login_open&&loginTimer){clearInterval(loginTimer);loginTimer=null}
-  return st;
+  try{
+    const [b,l]=await Promise.all([
+      fetch('/api/login_state?platform=boss').then(r=>r.json()).catch(()=>({})),
+      fetch('/api/login_state?platform=liepin').then(r=>r.json()).catch(()=>({}))
+    ]);
+    paintLoginChip('boss',b);paintLoginChip('liepin',l);
+    const anyOpen=!!(b.login_open||l.login_open);
+    const c=document.getElementById('btnCancelLogin');
+    if(c)c.style.display=anyOpen?'':'none';
+    if(anyOpen&&!loginTimer)loginTimer=setInterval(getLoginState,2500);
+    if(!anyOpen&&loginTimer){clearInterval(loginTimer);loginTimer=null}
+    return b;
+  }catch(e){return {logged:false,login_open:false}}
+}
+function platformLogin(p){
+  if(p==='liepin')return lpLogin();
+  return doRepair();          // BOSS：登录与修复登录态同一条流程
 }
 async function refreshRisk(){
   try{
@@ -1066,9 +1123,8 @@ async function cancelRepair(){const r=await(await fetch('/api/repair_cancel',{me
 let lpLoginTimer=null;
 async function getLpLoginState(){
   try{
-    const st=await(await fetch('/api/login_state?platform=liepin')).json();
-    const b=document.getElementById('btnLpLogin');
-    if(b)b.textContent=st.logged?'猎聘已登录':'登录猎聘';
+    const st=await fetch('/api/login_state?platform=liepin').then(r=>r.json());
+    paintLoginChip('liepin',st);
     if(st.login_open&&!lpLoginTimer)lpLoginTimer=setInterval(getLpLoginState,2500);
     if(!st.login_open&&lpLoginTimer){clearInterval(lpLoginTimer);lpLoginTimer=null}
     return st;
@@ -1241,8 +1297,11 @@ async function loadReplies(){
     <div class="dk"><div class="lb">仍在招</div><b>${d.active||0}</b><div class="dt">岗位未下线</div></div>
     <div class="dk"><div class="lb">上次同步</div><b style="font-size:16px">${esc((s.last||'未同步').slice(0,22))}</b>
       <div class="dt">${s.running?'同步中…':(s.parsed?`读取 ${s.parsed} 个会话，匹配 ${s.matched} 个岗位`:'点右上角同步')}</div></div>`;
-  document.getElementById('replyHint').textContent=
-    '回复是通过「BOSS 会话列表里出现该公司名」判断的，公司名对不上会漏判；漏了的可以在岗位详情里手动「标记 HR 已回复」。同步只读取，不会给 HR 发任何消息。';
+  const lpRows=(d.rows||[]).filter(r=>r.source==='liepin').length;
+  document.getElementById('replyHint').innerHTML=
+    '<b>自动同步只支持 BOSS</b>：靠「BOSS 会话列表里出现该公司名」判断，公司名对不上会漏判，漏了可在岗位详情手动「标记 HR 已回复」；同步只读取，不会给 HR 发任何消息。<br>'
+    +'<b>猎聘没有自动同步</b>：猎聘聊天记录在猎聘站内 IM，需要登录态调它的私有接口，本工具不接入 —— 猎聘岗位请用岗位详情的「标记 HR 已回复」手动维护'
+    +(lpRows?`（当前有 ${lpRows} 条猎聘岗位是手动标记的）`:'')+'。';
   if(!(d.rows||[]).length){
     box.innerHTML='<tr><td colspan="8" class="empty">还没有 HR 回复记录。点右上角「同步 BOSS 会话」读取一次。</td></tr>';
     return;
@@ -1252,8 +1311,12 @@ async function loadReplies(){
       :(r.applied===1?'<span class="tag tag-applied">已投递</span>':'<span class="tag">未投递</span>');
     const score=r.match_score||0;
     const cls=score>=60?'tag-sal':(score>=40?'':'');
+    const isLp=r.source==='liepin';
+    const platTag=isLp
+      ?'<span class="tag" style="background:#fff3e6;color:#b45309;border-color:#f6d9b8">猎聘</span>'
+      :'<span class="tag">BOSS</span>';
     return `<tr>
-      <td><b>${esc(r.company||'')}</b><div class="muted">${esc(r.city_name||'')}${r.area_district?' '+esc(r.area_district):''}</div></td>
+      <td><b>${esc(r.company||'')}</b> ${platTag}<div class="muted">${esc(r.city_name||'')}${r.area_district?' '+esc(r.area_district):''}</div></td>
       <td><a href="${esc(r.job_url||'#')}" target="_blank">${esc(r.job_name||'')}</a></td>
       <td>${r.salary?`<span class="tag tag-sal">${esc(r.salary)}</span>`:'<span class="muted">未知</span>'}</td>
       <td><span class="tag ${cls}" title="基于简历画像">${score}</span></td>
@@ -1269,7 +1332,9 @@ async function loadReplies(){
           <option value="rejected" ${r.stage==='rejected'?'selected':''}>未通过</option>
           ${r.stage?`<option value="clear" title="清除当前「${r.stage}」">清除阶段</option>`:''}
         </select>
-        <a class="btn btn-sm" href="https://www.zhipin.com/web/geek/chat" target="_blank" style="text-decoration:none">去聊天</a>
+        ${isLp
+          ?`<a class="btn btn-sm" href="${esc(r.job_url||'https://www.liepin.com/zhaopin/')}" target="_blank" style="text-decoration:none" title="猎聘不支持消息同步，去官网沟通">去猎聘</a>`
+          :'<a class="btn btn-sm" href="https://www.zhipin.com/web/geek/chat" target="_blank" style="text-decoration:none">去聊天</a>'}
         <button class="btn btn-sm" onclick="setReplied('${esc(r.job_id)}',false)">取消标记</button>
       </td></tr>`}).join('');
 }
@@ -1634,7 +1699,7 @@ async function loadRuns(){
 function exportCsv(){window.open('/api/export?'+filterQuery(),'_blank')}
 
 /* ========== 看板 ========== */
-let dashDays=14;
+let dashDays=14,dashSource='';   // dashSource: '' 全部 / boss / liepin
 function barRows(arr){
   const max=Math.max(1,...arr.map(x=>x.n));
   return arr.map((x,i)=>`<div class="brow2"><span class="bl" title="${esc(x.label)}">${esc(x.label||'无')}</span>
@@ -1662,10 +1727,17 @@ function areaChart(trend){
     <path d="${line}" fill="none" stroke="#111" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
     ${dots}${labels}</svg>`;
 }
-let _funnelCache=null;
+let _funnelCache=null,_funnelCacheSource=null;
 async function renderFunnel(){
-  let f=_funnelCache;
-  if(!f){try{const d=await(await fetch('/api/stages')).json();f=d.funnel||{};_funnelCache=f}catch(e){return}}
+  // 缓存必须带平台：切到猎聘后不能复用 BOSS 的漏斗数字
+  let f=null;
+  if(_funnelCache&&_funnelCacheSource===dashSource)f=_funnelCache;
+  if(!f){
+    try{
+      const d=await(await fetch('/api/stages'+(dashSource?'?source='+dashSource:''))).json();
+      f=d.funnel||{};_funnelCache=f;_funnelCacheSource=dashSource;
+    }catch(e){return}
+  }
   const steps=[['在招',f.active||0],['已投递',f.applied||0],['HR回复',f.replied||0],['面试',f.interview||0],['Offer',f.offer||0]];
   const el=document.getElementById('dashFunnel');
   if(!el)return;
@@ -1676,7 +1748,16 @@ async function renderFunnel(){
   }).join('')+(f.rejected?`<div class="fstep"><b style="color:var(--muted-soft)">${f.rejected}</b><div class="lb">未通过</div><div class="rate">&nbsp;</div></div>`:'');
 }
 async function loadStats(){
-  const s=await(await fetch('/api/stats?days='+dashDays)).json();
+  const s=await(await fetch('/api/stats?days='+dashDays+(dashSource?'&source='+dashSource:''))).json();
+  // 平台筛选提示：各平台条数固定显示，方便判断筛选后是否为空
+  const bs=s.by_source||{};
+  const hint=document.getElementById('dashSourceHint');
+  if(hint){
+    hint.textContent=(dashSource?
+      `${PLAT_NAME[dashSource]}：${s.total} 条（在招 ${s.active}）`
+      :`BOSS ${bs.boss||0} 条 ｜ 猎聘 ${bs.liepin||0} 条`);
+    if(!s.total)hint.textContent+='　该平台还没有数据，先在「获取配置」里打开它并抓一轮';
+  }
   document.getElementById('dkTotal').textContent=s.total;
   document.getElementById('dkTotalSub').textContent=`在招 ${s.active} / 下线 ${s.offline}`;
   document.getElementById('dkNew').textContent=s.new_7d;
@@ -1712,17 +1793,29 @@ function bindSeg(){
       loadStats();
     };
   });
+  // 看板平台筛选：一次切换同时作用于 KPI / 图表 / 漏斗 / 地图
+  document.querySelectorAll('#segSource button').forEach(b=>{
+    b.onclick=()=>{
+      dashSource=b.dataset.s||'';
+      document.querySelectorAll('#segSource button').forEach(x=>x.classList.toggle('on',x===b));
+      loadStats();
+    };
+  });
 }
 
 /* ========== 内置地图（Leaflet + 高德瓦片） ========== */
 const AMAP_TILE='https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}';
 const AMAP_OPT={subdomains:'1234',maxZoom:19,attribution:'© 高德地图'};
-let _mapAll=null,_mapPoints=null,_dashMap=null;
+let _mapAll=null,_dashMap=null;
+const _mapCache={};   // 按平台缓存点位：'' 全部 / boss / liepin
 
-function loadMapPoints(){
-  if(_mapPoints)return Promise.resolve(_mapPoints);
-  return fetch('/api/map').then(r=>r.json()).then(d=>{_mapPoints=d;return d;});
+function loadMapPoints(source){
+  const s=source||'';
+  if(_mapCache[s])return Promise.resolve(_mapCache[s]);
+  const url='/api/map'+(s?'?source='+encodeURIComponent(s):'');
+  return fetch(url).then(r=>r.json()).then(d=>{_mapCache[s]=d;return d;});
 }
+function clearMapCache(){Object.keys(_mapCache).forEach(k=>{delete _mapCache[k]})}
 function circleMarker(p){
   const color=p.applied===1?'#c92a2a':(p.status==='offline'?'#bdbdbd':'#1c69d4');
   const m=L.circleMarker([p.lat,p.lng],{radius:7,color:'#fff',weight:1.5,fillColor:color,fillOpacity:.95});
@@ -1743,7 +1836,7 @@ function fitLayer(layer,map,pts){
   else if(pts&&pts.length===1){map.setView([pts[0].lat,pts[0].lng],14);}
 }
 async function openMap(jid){
-  const d=await loadMapPoints();
+  const d=await loadMapPoints('');   // 单岗定位查全部平台，避免筛选后找不到点
   const p=(d.points||[]).find(x=>x.job_id===jid);
   document.getElementById('mapMask').classList.add('show');
   document.getElementById('mapSub').textContent=p?`（${p.company||p.job_name}）`:'（该岗位暂无坐标）';
@@ -1755,10 +1848,12 @@ async function openMap(jid){
   setTimeout(()=>_mapAll&&_mapAll.invalidateSize(),60);
 }
 async function openMapAll(){
-  const d=await loadMapPoints();
+  const d=await loadMapPoints(dashSource);   // 跟随看板当前的平台筛选
   document.getElementById('mapMask').classList.add('show');
-  document.getElementById('mapSub').textContent='（全部岗位）';
-  document.getElementById('mapCount').textContent=`共 ${(d.points||[]).length} 个点位`;
+  document.getElementById('mapSub').textContent='（'+(dashSource?PLAT_NAME[dashSource]:'全部平台')+'）';
+  document.getElementById('mapCount').textContent=(d.points||[]).length
+    ? `共 ${(d.points||[]).length} 个点位`
+    : (d.no_coord?`${d.no_coord} 条岗位没有坐标可上图`:'暂无点位');
   if(_mapAll){_mapAll.remove();_mapAll=null;}
   _mapAll=L.map('mapBox',{zoomControl:true}).setView(d.center||[24.5,118.1],11);
   L.tileLayer(AMAP_TILE,AMAP_OPT).addTo(_mapAll);
@@ -1785,11 +1880,21 @@ function dashLegendHtml(mode){
 async function renderDashMap(){
   const el=document.getElementById('dashMap');
   if(!el||typeof L==='undefined')return;
-  const d=await loadMapPoints();
+  const d=await loadMapPoints(dashSource);   // 跟随看板平台筛选
   const pts=d.points||[];
   const act=pts.filter(p=>p.status==='active');
+  const note=document.getElementById('dashMapNote');
+  if(note){
+    if(!pts.length){
+      note.classList.add('show');
+      note.textContent=dashSource==='liepin'
+        ? `猎聘搜索接口返回的是职位卡片，本身不含经纬度，所以地图上没有点位（当前 ${d.no_coord||0} 条猎聘岗位）。地理分布请看上方「城市分布」，或切到「全部 / BOSS」看地图。`
+        : (dashSource?`${PLAT_NAME[dashSource]}当前没有带坐标的岗位（${d.no_coord||0} 条缺坐标）。`
+                      :'暂无带坐标的岗位；抓过一轮后就会自动上图。');
+    }else note.classList.remove('show');
+  }
   document.getElementById('dashMapSub').textContent=
-    dashMapMode==='point'?`${pts.length} 个点位`:`在招 ${act.length} 个点位`;
+    !pts.length?'无点位':(dashMapMode==='point'?`${pts.length} 个点位`:`在招 ${act.length} 个点位`);
   document.getElementById('dashMapLegend').innerHTML=dashLegendHtml(dashMapMode);
   if(!_dashMap){
     _dashMap=L.map(el,{zoomControl:true,scrollWheelZoom:false}).setView(d.center||[24.5,118.1],11);
