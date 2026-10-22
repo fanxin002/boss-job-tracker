@@ -216,11 +216,24 @@ def parse_resp(text):
     return cards, pag
 
 
-def run_crawl(run_id, keywords, cities, pages, headless=False, offscreen=True):
+def run_crawl(run_id, keywords, cities, pages, headless=False, offscreen=True, progress=None):
     """猎聘整轮获取（后台线程调用）。cities 复用 BOSS 配置 [{code,name}...]，
-    按中文 name 映射 dqCode；无映射城市跳过。返回 (fetched, new_cnt, offline_cnt)"""
+    按中文 name 映射 dqCode；无映射城市跳过。返回 (fetched, new_cnt, offline_cnt)
+    progress: 可选回调 (done, total, note)"""
     logf = lambda s: db.append_run_log(run_id, s)  # noqa: E731
     fetched = new_cnt = offline_cnt = 0
+    tot = max(1, len(keywords) * len(cities) * max(1, int(pages or 1)))
+    done = {"n": 0}
+
+    def _p(note=""):
+        if not progress:
+            return
+        try:
+            progress(min(done["n"], tot), tot, note)
+        except Exception:
+            pass
+
+    _p("准备浏览器")
     try:
         page = _ensure_liepin_browser(headless=headless, offscreen=offscreen)
         # 过 WAF：进搜索页让 security.min.js 完整执行拿 acw_tc 通行证，之后同源 fetch 才通畅
@@ -274,6 +287,8 @@ def run_crawl(run_id, keywords, cities, pages, headless=False, offscreen=True):
                     seen_ids.update(new_ids)
                     batch.extend(rows)
                     logf(f"  [{kw}·{name}] 第 {p} 页 {len(rows)} 条（新 {len(new_ids)}）")
+                    done["n"] += 1
+                    _p(f"{kw} · {name} 第 {p} 页")
                     if not new_ids:
                         logf("  全部重复 ID，停止翻页")
                         break
