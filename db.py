@@ -6,7 +6,7 @@ import os
 import re
 import sqlite3
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -81,7 +81,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     gold_hunter INTEGER DEFAULT 0,           -- 是否猎头发布
     encrypt_brand_id TEXT,                   -- 公司加密ID（同公司聚合用）
     boss_avatar TEXT,                        -- HR 头像 URL
-    source TEXT DEFAULT 'boss'               -- 数据来源平台：boss / liepin
+    source TEXT DEFAULT 'boss',              -- 数据来源平台：boss / liepin
+    miss_count INTEGER DEFAULT 0,            -- 连续「本轮没再出现」的次数（≥阈值才判下线）
+    offline_at TEXT                          -- 判下线的时间（用于误杀后一键撤销）
 );
 CREATE TABLE IF NOT EXISTS runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -163,7 +165,7 @@ INSERT INTO jobs ({",".join(COLS)}) VALUES ({",".join("?" * len(COLS))})
 ON CONFLICT(job_id) DO UPDATE SET
     lid=excluded.lid, security_id=excluded.security_id,
     last_seen=excluded.last_seen, last_run_id=excluded.last_run_id,
-    is_new=0, status='active',
+    is_new=0, status='active', miss_count=0, offline_at=NULL,
     salary=CASE WHEN excluded.salary<>'' THEN excluded.salary ELSE jobs.salary END,
     salary_min=CASE WHEN excluded.salary_min IS NOT NULL THEN excluded.salary_min ELSE jobs.salary_min END,
     salary_max=CASE WHEN excluded.salary_max IS NOT NULL THEN excluded.salary_max ELSE jobs.salary_max END,
@@ -212,6 +214,8 @@ def _migrate(c):
                      ("coord_approx", "INTEGER DEFAULT 0"),
                      # 跟进日程：下次面试/沟通时间与备注
                      ("next_at", "TEXT"), ("next_note", "TEXT"),
+                     # 下线判定：连续未出现次数（防误杀）+ 判下线时间（误杀可撤销）
+                     ("miss_count", "INTEGER DEFAULT 0"), ("offline_at", "TEXT"),
                      # 跨平台同岗合并键（公司名+岗位名归一后）
                      ("dedupe_key", "TEXT")]:
         if col not in cols:
@@ -350,31 +354,90 @@ def upsert_jobs(rows, run_id):
     return new_cnt, seen
 
 
-def mark_offline(covered_pairs, run_job_ids, source="boss"):
-    """本次健康覆盖的 (keyword, city_code) 范围内：
-    - 未再出现的 active 岗位 → 标记下线
-    - 范围内本轮未触及的岗位 → 清掉 is_new（新增=本轮首次出现）
-    source 隔离：猎聘轮的下线判定不会误伤 BOSS 的行（反之亦然）"""
+def mark_offline(covered_pairs, run_job_ids, source="boss", min_miss=2,
+                 coverage=0.6, log=None):
+    """本次覆盖的 (keyword, city_code) 范围内判定下线。
+
+    防误杀三道闸（岗位在官网还活着却被判下线，基本都是这三类原因）：
+      1) 覆盖率闸：本轮在该范围内重新命中的岗位数 < 该范围活跃数的 coverage 比例
+         （默认 60%），说明这次抓取不完整（翻页变浅 / 排序变了 / 被风控截断），
+         整段范围跳过判定——宁可漏判，不可误杀。
+      2) 连续未出现闸：miss_count 累加，只有连续 min_miss 轮（默认 2 轮）都没再
+         出现才判下线。BOSS 同条件的排序会浮动，单轮落榜很常见。
+      3) source 隔离：猎聘轮的下线判定不会误伤 BOSS 的行（反之亦然）。
+    """
+    def _log(msg):
+        if log:
+            try:
+                log(msg)
+            except Exception:
+                pass
+
     offline = 0
     ids = list(run_job_ids)
     if not ids:
         return 0
+    ph = ",".join("?" * len(ids))
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with _lock:
         c = conn()
-        placeholders = ",".join("?" * len(ids))
         for kw, cc in covered_pairs:
+            scope = "keyword=? AND city_code=? AND source=?"
+            sp = [kw, cc, source]
+            active_before = c.execute(
+                f"SELECT COUNT(*) n FROM jobs WHERE {scope} AND status='active'", sp
+            ).fetchone()["n"]
+            if active_before == 0:
+                continue
+            seen_here = c.execute(
+                f"SELECT COUNT(*) n FROM jobs WHERE {scope} AND status='active' "
+                f"AND job_id IN ({ph})", sp + ids).fetchone()["n"]
+            if seen_here == 0:
+                _log(f"⚠️ 「{kw}」@ {cc} 本轮没抓到任何已存岗位，跳过下线判定"
+                     f"（抓取不完整，避免误杀）")
+                continue
+            if seen_here < active_before * coverage:
+                _log(f"⚠️ 「{kw}」@ {cc} 本轮只重新命中 {seen_here}/{active_before} 条"
+                     f"（<{int(coverage*100)}%），疑似翻页变浅或接口截断，跳过下线判定")
+                continue
+            # 本轮仍出现 → 清零；未出现 → 累加
+            c.execute(f"UPDATE jobs SET miss_count=0 WHERE {scope} AND job_id IN ({ph})",
+                      sp + ids)
+            c.execute(
+                f"UPDATE jobs SET miss_count=COALESCE(miss_count,0)+1 "
+                f"WHERE {scope} AND status='active' AND job_id NOT IN ({ph})", sp + ids)
             cur = c.execute(
-                f"UPDATE jobs SET status='offline' "
-                f"WHERE keyword=? AND city_code=? AND source=? AND status='active' AND job_id NOT IN ({placeholders})",
-                [kw, cc, source] + ids)
+                f"UPDATE jobs SET status='offline', offline_at=? "
+                f"WHERE {scope} AND status='active' AND job_id NOT IN ({ph}) "
+                f"AND COALESCE(miss_count,0)>=?", [now] + sp + ids + [min_miss])
             offline += cur.rowcount
             c.execute(
                 f"UPDATE jobs SET is_new=0 "
-                f"WHERE keyword=? AND city_code=? AND source=? AND is_new=1 AND job_id NOT IN ({placeholders})",
-                [kw, cc, source] + ids)
+                f"WHERE {scope} AND is_new=1 AND job_id NOT IN ({ph})", sp + ids)
         c.commit()
         c.close()
     return offline
+
+
+def recover_offline(hours=24, source=None):
+    """撤销下线判定（误杀回滚）：恢复为 active 并清零连续未出现计数。
+    hours<=0 → 不限时间，恢复全部「已下线」（用于旧数据整体重判）"""
+    with _lock:
+        c = conn()
+        where = "status='offline'"
+        p = []
+        if hours and hours > 0:
+            since = (datetime.now() - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
+            where += " AND COALESCE(offline_at,first_seen)>=?"
+            p.append(since)
+        if source:
+            where += " AND source=?"
+            p.append(source)
+        n = c.execute(f"UPDATE jobs SET status='active', miss_count=0, offline_at=NULL "
+                      f"WHERE {where}", p).rowcount
+        c.commit()
+        c.close()
+    return n
 
 
 # ---------- 筛选条件构建（query_jobs / all_job_rows 共用） ----------
