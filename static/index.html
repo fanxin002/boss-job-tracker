@@ -501,6 +501,8 @@
             <div class="fcell"><label>求职阶段</label><select id="fStage">
               <option value="">全部</option><option value="interview">面试中</option><option value="offer">已拿 Offer</option><option value="rejected">未通过</option><option value="none">未进入阶段</option></select></div>
             <div class="fcell"><label>同岗合并</label><select id="fDedupe"><option value="">不合并</option><option value="1">合并同公司同岗位</option></select></div>
+            <div class="fcell" style="display:flex;align-items:flex-end">
+              <button class="btn btn-sm" onclick="undoOffline()" title="抓取翻页变浅/被风控截断时，在招岗位可能被误判下线。这个按钮把最近 24 小时内判的下线全部恢复为在招">撤销误杀（恢复 24h 内下线）</button></div>
           </div>
         </div>
         <div class="fchips" id="filterChips"><span class="ph">未使用筛选条件</span></div>
@@ -1595,6 +1597,18 @@ function toggleMore(force){
   try{localStorage.setItem('fMoreOpen',open?'1':'0')}catch(e){}
 }
 function filterQuery(){const o=readFilters();return Object.keys(o).map(k=>k+'='+encodeURIComponent(o[k])).join('&')}
+/* 误杀回滚：抓取不完整（翻页变浅/风控截断）导致在招岗位被判下线时，一键恢复 */
+async function undoOffline(){
+  if(!confirm('把最近 24 小时内被判「已下线」的岗位恢复为在招？（抓取不完整导致误杀时用）'))return;
+  try{
+    let r=await(await fetch('/api/offline/recover?hours=24',{method:'POST'})).json();
+    if(!r.count&&confirm('最近 24 小时内没有下线记录。\n要恢复全部「已下线」岗位吗？\n（更早的数据没记下线时间，只能整体恢复；下次抓取会按新规则重新判定）')){
+      r=await(await fetch('/api/offline/recover?hours=0',{method:'POST'})).json();
+    }
+    toast(r.msg||('已恢复 '+r.count+' 条'));
+    if(r.count)loadJobs(1);
+  }catch(e){toast('恢复失败：'+e)}
+}
 function renderChips(){
   const o=readFilters(),box=document.getElementById('filterChips'),chips=[];
   FF.forEach(([id,k,label])=>{
