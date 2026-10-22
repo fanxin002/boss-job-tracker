@@ -52,6 +52,12 @@ flowchart LR
 - 统计在招岗位 JD/岗位名里各技能出现频次，切成「岗位要 · 我有 / 岗位要 · 我缺」两栏
 - 直接回答「下一份简历该补什么」：例如当前 342 条在招里，统计学被 57 个岗位提到但画像里没有
 
+**技能薪资分析（市场需求侧）**
+- 回答「哪些技能在高薪岗位里更重要」：每个技能给出 需求岗位数 / 薪资中位 / 溢价 / 高薪岗出现率 / 偏好度
+- 三种排序：需求热度（谁提得多）、薪资溢价（要求该技能 vs 不要求的薪资中位数差，单位 K）、高薪偏好（高薪岗出现率 ÷ 整体出现率，>1 说明高薪岗更看重）
+- 高薪线 = 全体在招薪资 P75；溢价是组间相关差，不是因果
+- 实测结论示例：Flink 仅 7 个岗位但薪资中位 14K、溢价 +4K、高薪岗出现率 57%；而 SQL/Python 岗位量大（70/71）溢价仅 +1.7K/+2.3K——前者是敲门砖，后者是标配
+
 **投递与提醒**
 - 按筛选或勾选批量投递（模拟官方「打招呼」），结果与失败原因全部留存
 - 批量操作：收藏 / 标阶段 / 标已回复，**两平台通用**（猎聘只是不能批量投递，其它动作照旧）
@@ -129,6 +135,7 @@ boss-job-tracker/
 | `GET /api/jobs` | 岗位列表（keyword/city_code/status/applied/degree/experience/scale/industry/salary_min/salary_max/no_salary/has_detail/starred/replied/overdue/dedupe/q/sort/page/size） |
 | `GET /api/job` | 单条岗位详情（详情面板用；不再要求岗位必须在当前页，翻到第 8 页也能打开） |
 | `GET /api/skills/gap` | 技能缺口：「岗位要·我有」vs「岗位要·我缺」，按岗位数排序 |
+| `GET /api/skills/salary` | 技能薪资分析：需求热度/薪资溢价/高薪偏好（`?source=boss/liepin`） |
 | `GET /api/conversion` | 投递转化分析，`by=source/scale/keyword/city/degree` |
 | `GET /api/schedule` `/api/next_at` | 跟进日程查询 / 写入（面试、复聊时间） |
 | `POST /api/bulk` | 批量收藏 / 阶段 / 已回复（不含投递） |
