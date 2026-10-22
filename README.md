@@ -9,7 +9,7 @@
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
 ![SQLite](https://img.shields.io/badge/SQLite-%E6%9C%AC%E5%9C%B0%E5%AD%98%E5%82%A8-003B57?logo=sqlite&logoColor=white)
-![Tests](https://img.shields.io/badge/e2e-207%2F207-brightgreen)
+![Tests](https://img.shields.io/badge/e2e-214%2F214-brightgreen)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
 
 
@@ -40,16 +40,18 @@ flowchart LR
 
 **筛选与匹配**
 - 简历画像：上传 PDF / Word / TXT 或一键同步 BOSS 在线简历，本地技能词典解析
-- 每个岗位 0–100 匹配分：技能命中 + 薪资 + 学历 + 职位相关 + 城市
+- 每个岗位 0–100 匹配分：技能命中 + 薪资 + 学历 + 职位相关 + 城市；**每轮获取、每次补抓描述后都自动重算**（不再只在改画像时才更新）
 - 12 类筛选、全列可排序、同岗合并、全文搜索、CSV 导出
 
 **投递与提醒**
 - 按筛选或勾选批量投递（模拟官方「打招呼」），结果与失败原因全部留存
 - 投递超期红色标记（3 / 7 / 14 天没人理）、独立 HR 回复页、PushPlus 微信日报
+- 回复自动同步**只支持 BOSS**（读会话列表公司名）；猎聘回复在其站内 IM，需登录态调私有接口，本工具不接入，猎聘岗位用手动「标记 HR 已回复」
 
 **可视化**
 - 内置 Leaflet 地图（已本地打包，不依赖外网 CDN）：单点弹窗、全量分布、热力图按数量或薪资
 - 数据看板：KPI 卡、14 天趋势面积图、薪资 / 学历 / 经验 / 城市 / HR 职位分布
+- **看板与地图都支持平台筛选**（全部 / BOSS / 猎聘），KPI、漏斗、图表、地图一次切换全跟随；猎聘卡片不含经纬度，地图会直接说明原因并给条数
 
 ## 🚀 快速开始
 
@@ -63,10 +65,10 @@ python app.py                    # 或 Windows 双击 start.bat
 打开 **http://127.0.0.1:8765**，首次使用按这个顺序：
 
 1. 「获取配置」→ 填关键词（逗号分隔）、选城市、设每城页数（建议 3–5）→ 点「立即获取」
-2. 第一次会要求登录：右上角「登录 / 修复」，弹出窗口扫码一次，Cookie 之后自动复用
+2. 第一次会要求登录：顶部点「**BOSS**」胶囊，弹出窗口扫码一次，Cookie 之后自动复用（顶部两个胶囊分别显示 BOSS / 猎聘 是否已登录）
 3. 「简历画像」→ 同步 BOSS 简历或上传简历文件 → 全库自动重算匹配分
 4. （可选）把 PushPlus token 写入 `data/pushplus.txt`，开启微信日报
-5. （可选）想合并猎聘岗位：「获取配置」顶部「平台开关」→ 猎聘选「开启」；免登录即可搜索，点顶部「登录猎聘」一次登录（独立登录态）可拿更全结果
+5. （可选）想合并猎聘岗位：「获取配置」顶部「平台开关」→ 猎聘选「开启」；免登录即可搜索，点顶部「猎聘」胶囊登录一次（独立登录态）可拿更全结果
 
 <details>
 <summary><b>⚠️ 免责声明</b>（点开阅读）</summary>
@@ -87,7 +89,7 @@ boss-job-tracker/
 ├── salary.py           # 薪资文本 → 数值解析
 ├── resume.py           # 简历解析 + 技能词典 + 匹配分计算
 ├── push.py             # PushPlus 微信推送
-├── e2e_test.py         # 160 项端到端回归测试（离线，monkeypatch 模拟浏览器）
+├── e2e_test.py         # 214 项端到端回归测试（离线，monkeypatch 模拟浏览器）
 ├── selftest.py         # 轻量自检
 ├── start.bat           # Windows 一键启动
 ├── requirements.txt
@@ -111,13 +113,13 @@ boss-job-tracker/
 |---|---|
 | `GET /api/jobs` | 岗位列表（keyword/city_code/status/applied/degree/experience/scale/industry/salary_min/salary_max/no_salary/has_detail/starred/replied/overdue/dedupe/q/sort/page/size） |
 | `GET /api/counts` | 各筛选口径计数（含投递超期数） |
-| `GET /api/stats` | 看板聚合（趋势/分布/地图点位统计） |
-| `GET /api/map` | 地图点位（≤1500，含坐标/薪资/HR 字段，热力权重用） |
+| `GET /api/stats` | 看板聚合（趋势/分布/地图点位统计），`?source=boss/liepin` 按平台筛选，并返回各平台条数 |
+| `GET /api/map` | 地图点位（≤1500，含坐标/薪资/HR 字段，热力权重用），`?source=` 按平台筛选并返回 `no_coord` 缺坐标条数 |
 | `POST /api/crawl` | 统一获取入口（默认按平台开关顺序跑 BOSS→猎聘；可 `?platform=boss/liepin` 单跑） |
 | `GET /api/status` `/api/runs` | 运行状态 / 最近 10 轮历史（含日志） |
 | `POST /api/apply` `GET /api/apply_status` `/api/applications` | 投递执行与记录 |
 | `POST /api/details` `/api/details_status` | 按筛选/勾选补抓描述 |
-| `POST /api/replies/sync` `GET /api/replies` `/api/replies/state` | HR 回复只读同步与查看 |
+| `POST /api/replies/sync` `GET /api/replies` `/api/replies/state` | HR 回复只读同步与查看（**自动同步仅 BOSS**，响应里 `sync_supported` 标明各平台支持范围） |
 | `POST /api/profile/sync_boss` `/api/profile/upload` `/api/profile/patch` | 简历画像三种来源 |
 | `POST /api/config` `GET /api/config` | 获取配置读写 |
 | `GET /api/export` | 当前筛选结果 CSV 导出（含坐标/HR/匹配分） |
@@ -129,16 +131,18 @@ boss-job-tracker/
 <details>
 <summary><b>🧮 匹配分算法与测试</b></summary>
 
-**算法**：`核心技能命中 ×32 + 其他技能 ×1.6（≤45）+ 薪资达标 25 + 学历满足 15 + 职位词相关 10 + 城市加分 5`，封顶 100。技能词典 60 项（数据分析向），英文技能按词边界匹配（避免 sql 误中 mysql）。简历变更后全库自动重算。
+**算法**：`核心技能命中 ×32 + 其他技能 ×1.6（≤45）+ 薪资达标 25 + 学历满足 15 + 职位词相关 10 + 城市加分 5`，封顶 100。技能词典 60 项（数据分析向），英文技能按词边界匹配（避免 sql 误中 mysql）。简历变更、每轮获取、每次补抓描述后都会全库重算。
+
+> 猎聘搜索卡片本身不带技能标签（实测 `job.labels` 恒为空、无 JD 文本），所以它的技能项靠「职位名 + 行业」命中，分数天然比 BOSS 低一档；两平台数字可比，但别拿绝对分值横向对比。
 
 **测试**：
 
 ```bash
 python e2e_test.py
-# ===== 160/160 PASSED =====
+# ===== 214/214 PASSED =====
 ```
 
-离线回归：monkeypatch 模拟浏览器与接口返回，覆盖入库/去重/薪资空值保护/筛选/排序/超期口径/匹配分/投递状态机/风控熔断/预算/地图/看板聚合等。
+离线回归：monkeypatch 模拟浏览器与接口返回，覆盖入库/去重/薪资空值保护/筛选/排序/超期口径/匹配分/投递状态机/风控熔断/预算/地图/看板聚合/**平台隔离与平台筛选**等。
 
 </details>
 
@@ -147,7 +151,8 @@ python e2e_test.py
 
 - 岗位数据来自 BOSS 列表接口，单关键词单城市页数有上限（约 30 页 × 30 条）
 - 猎聘：仅做获取/入库/看板合并（投递与消息回复请到猎聘官网手动操作）；接口翻页硬上限 400 条/组合；城市需有 dqCode 映射（liepin.py CITY_CODE，已覆盖主流 12 城，缺的城市日志会提示补码）
-- 「HR 已回复」按公司名匹配会话，同名多岗可能串标，可在 HR 回复页「取消标记」
+- 猎聘搜索卡片不含经纬度 → 地图上无点位（看板会提示原因，地理分布请看「城市分布」）；也不含技能标签与 JD，所以「补抓描述」只处理 BOSS，猎聘行会跳过并计数
+- 「HR 已回复」按公司名匹配会话，同名多岗可能串标，可在 HR 回复页「取消标记」；猎聘回复无法自动同步，只能手动标记
 - 地图瓦片用高德公共免 key 瓦片，仅限个人低频率使用
 - PushPlus 为第三方服务，token 需自行申请；不配置则日报功能静默关闭
 - Windows + Chrome/Edge 组合验证过；macOS/Linux 未测试（DrissionPage 理论支持）
