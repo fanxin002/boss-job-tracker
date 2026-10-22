@@ -6,8 +6,8 @@ TOKEN = os.environ.get("GH_TOKEN", "")
 OWNER, REPO, BRANCH = "fanxin002", "boss-job-tracker", "main"
 API = f"https://api.github.com/repos/{OWNER}/{REPO}/contents"
 ROOT = os.path.dirname(os.path.abspath(__file__))
-FILES = ["README.md", "app.py", "db.py", "e2e_test.py", "static/index.html"]
-MSG = "feat: platform-aware login status, dashboard/map platform filter, fixed match score recompute"
+FILES = ["README.md", "app.py", "e2e_test.py", "liepin.py", "static/index.html"]
+MSG = "fix: open job detail from title (new /api/job), platform status hint, reply sync time, city display dedupe"
 
 
 def req(url, data=None, method=None):
