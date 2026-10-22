@@ -6,6 +6,7 @@ import os
 import re
 import sqlite3
 import threading
+import time
 from datetime import datetime, timedelta
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -13,7 +14,7 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 os.makedirs(DATA_DIR, exist_ok=True)
 DB_PATH = os.path.join(DATA_DIR, "jobs.db")
 
-_lock = threading.Lock()
+_lock = threading.RLock()
 
 DEFAULT_CONFIG = {
     "keywords": "数据分析",
@@ -379,6 +380,9 @@ def mark_offline(covered_pairs, run_job_ids, source="boss", min_miss=2,
         return 0
     ph = ",".join("?" * len(ids))
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    _t0 = time.time()
+    # 诊断日志：这个函数曾经无声卡死过 10 分钟（run 29），进入/每个范围/退出都留痕
+    _log(f"🔍 下线判定开始：{len(covered_pairs)} 个范围 ｜ 本轮 {len(ids)} 个岗位ID")
     with _lock:
         c = conn()
         for kw, cc in covered_pairs:
@@ -416,6 +420,7 @@ def mark_offline(covered_pairs, run_job_ids, source="boss", min_miss=2,
                 f"WHERE {scope} AND is_new=1 AND job_id NOT IN ({ph})", sp + ids)
         c.commit()
         c.close()
+    _log(f"🔍 下线判定完成：标记 {offline} 条，耗时 {time.time() - _t0:.1f}s")
     return offline
 
 
