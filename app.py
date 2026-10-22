@@ -111,8 +111,10 @@ def do_crawl(trigger="manual"):
     try:
         db.backup()          # 每轮获取前留一份快照（保留 7 份）
         crawler.clear_last_risk()
+        _progress_start("boss", "准备浏览器")
         fetched, new_cnt, off_cnt = crawler.run_crawl(rid, keywords, cities, pages, detail,
-                                                      headless, offscreen, degree)
+                                                      headless, offscreen, degree,
+                                                      progress=_progress_cb("boss"))
         _rescore(rid)   # 新岗位入库后立即按画像打分，避免「匹配」列全是 0
         if crawler.LAST_RISK.get("code") is not None:  # 本轮撞风控 → 上冷却锁
             risk = db.set_risk(crawler.LAST_RISK["code"], crawler.LAST_RISK["msg"])
@@ -127,6 +129,7 @@ def do_crawl(trigger="manual"):
     finally:
         with _state_lock:
             _state["running"] = False
+        _progress_end()
     return rid
 
 
@@ -142,6 +145,25 @@ def _push_after(rid, error=None):
 # ---------- 调度 ----------
 _liepin_state = {"running": False, "run_id": None}
 _unified_state = {"running": False, "lock": threading.Lock()}  # 统一获取线程防重入
+
+# 获取进度（前端进度条）：Boss/Liepin 各自回调写入，/api/status 读取
+_PROGRESS = {"platform": "", "stage": "", "done": 0, "total": 0, "at": 0.0}
+
+
+def _progress_cb(platform):
+    """给 crawler/liepin 的进度回调：done/total 是「页」粒度"""
+    def cb(done, total, note=""):
+        _PROGRESS.update(platform=platform, done=int(done), total=int(total),
+                         stage=(note or _PROGRESS.get("stage", "")), at=time.time())
+    return cb
+
+
+def _progress_start(platform, stage):
+    _PROGRESS.update(platform=platform, stage=stage, done=0, total=0, at=time.time())
+
+
+def _progress_end():
+    _PROGRESS.update(platform="", stage="", done=0, total=0, at=0.0)
 
 
 def do_crawl_liepin(trigger="manual"):
@@ -176,8 +198,10 @@ def do_crawl_liepin(trigger="manual"):
         _liepin_state["running"] = True
         _liepin_state["run_id"] = rid
     try:
+        _progress_start("liepin", "准备浏览器")
         fetched, new_cnt, off_cnt = liepin.run_crawl(rid, keywords, cities, lp_pages,
-                                                     headless=headless, offscreen=offscreen)
+                                                     headless=headless, offscreen=offscreen,
+                                                     progress=_progress_cb("liepin"))
         # 猎聘卡片没有经纬度：用同城同区的 BOSS 坐标做区级近似点位，让地图也能看猎聘
         try:
             n_coord = db.fill_approx_coords("liepin")
@@ -197,6 +221,7 @@ def do_crawl_liepin(trigger="manual"):
     finally:
         with _state_lock:
             _liepin_state["running"] = False
+        _progress_end()
     return rid
 
 
@@ -378,6 +403,9 @@ def api_crawl(platform: str = "all"):
         cfg = db.get_config()
         if str(cfg.get("boss_enabled", "1")) != "1":
             return {"ok": False, "msg": "BOSS 平台未启用：请先在配置里打开「BOSS」开关"}
+        if not crawler.cookies_have_login():
+            return {"ok": False, "need_login": True,
+                    "msg": "BOSS 还没真正登录（Cookie 里没有 wt2，当前是游客态）：点顶部「BOSS」胶囊扫码登录后再获取"}
         risk = db.get_risk()
         if risk["active"]:
             return {"ok": False, "msg": _risk_block_msg(risk)}
@@ -397,12 +425,16 @@ def api_crawl(platform: str = "all"):
     if _state["running"] or _liepin_state["running"] or _unified_state["running"]:
         return {"ok": False, "msg": "已有获取任务在运行，请等待本轮结束"}
     blocked = []
+    need_login = False
     if "boss" in plats:
         risk = db.get_risk()
         if risk["active"]:
             blocked.append(f"BOSS 风控冷却中（{risk['until'][11:16]} 解除）")
         if crawler.get_login_state().get("login_open") or crawler.repair_state().get("running"):
             blocked.append("BOSS 登录/修复窗口进行中")
+        if not crawler.cookies_have_login():
+            blocked.append("BOSS 未真正登录（Cookie 无 wt2），请点顶部「BOSS」胶囊扫码登录")
+            need_login = True
         with _apply_lock:
             if _apply_state["running"]:
                 blocked.append("投递进行中")
@@ -416,7 +448,8 @@ def api_crawl(platform: str = "all"):
             blocked.append("猎聘登录窗口进行中")
     hard = [b for b in blocked if "登录" in b or "修复" in b or "投递" in b or "补抓" in b]
     if hard:
-        return {"ok": False, "msg": "；".join(hard) + "，请处理后再获取"}
+        return {"ok": False, "need_login": need_login,
+                "msg": "；".join(hard) + "，请处理后再获取"}
     if blocked and len(blocked) == len(plats):
         return {"ok": False, "msg": "；".join(blocked) + "，本轮没有可跑的平台"}
 
@@ -440,9 +473,11 @@ def api_status():
     runs = db.get_runs(1)
     r = runs[0] if runs else {}
     cfg = db.get_config()
+    pg = dict(_PROGRESS)
+    pg["pct"] = round(pg["done"] * 100.0 / pg["total"]) if pg.get("total") else 0
     return {"running": _state["running"] or _liepin_state["running"] or _unified_state["running"],
             "boss_running": _state["running"], "liepin_running": _liepin_state["running"],
-            "platforms": enabled_platforms(cfg), "last_run": r}
+            "platforms": enabled_platforms(cfg), "last_run": r, "progress": pg}
 
 
 @app.get("/api/login_state")
