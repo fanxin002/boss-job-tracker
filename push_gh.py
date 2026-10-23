@@ -6,8 +6,8 @@ TOKEN = os.environ.get("GH_TOKEN", "")
 OWNER, REPO, BRANCH = "fanxin002", "boss-job-tracker", "main"
 API = f"https://api.github.com/repos/{OWNER}/{REPO}/contents"
 ROOT = os.path.dirname(os.path.abspath(__file__))
-FILES = ["static/index.html", "e2e_test.py", "push_gh.py"]
-MSG = "design: unify shape system (5 radius tokens), round all controls, custom select arrow, filter group panel"
+FILES = ["e2e_test.py", "push_gh.py"]
+MSG = "chore(privacy): replace real name/employer in test resume sample with fictional data"
 
 
 def req(url, data=None, method=None):
