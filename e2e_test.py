@@ -797,6 +797,16 @@ def main():
     check("回复-HR回复页接口", rpl.get("total", 0) >= 1 and _a_rows
           and _a_rows[0].get("reply_note"), f"total={rpl.get('total')}")
     check("回复-接口带同步状态", "sync" in rpl and "running" in rpl["sync"])
+    # 2026-10-23 用户要求：投递完就进 HR 回复页（不用等已回复），状态分「等待回复/已回复」
+    db.upsert_jobs([mk("RP1")], rid2)
+    db.set_applied(["RP1"], 1)          # 只投递、未回复
+    _rpl2 = client.get("/api/replies?limit=100").json()
+    _wait = [x for x in _rpl2.get("rows", []) if x.get("job_id") == "RP1"]
+    check("回复-投递即入列表(等待回复)", bool(_wait) and _wait[0]["replied"] == 0
+          and (_rpl2.get("waiting") or 0) >= 1, f"waiting={_rpl2.get('waiting')}")
+    check("回复-已回复计数与总数分离",
+          (_rpl2.get("replied") or 0) >= 1 and (_rpl2.get("total") or 0) > (_rpl2.get("replied") or 0),
+          f"total={_rpl2.get('total')} replied={_rpl2.get('replied')}")
     st_path2 = appmod.crawler.STATE_FILE
     old3 = open(st_path2, encoding="utf-8").read() if os.path.exists(st_path2) else None
     json.dump({"logged": False, "at": "", "note": ""}, open(st_path2, "w", encoding="utf-8"))
