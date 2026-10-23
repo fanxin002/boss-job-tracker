@@ -523,7 +523,7 @@
       </div>
 
       <div class="card">
-        <h3>岗位 <span class="right" id="totalHint"></span></h3>
+        <h3>岗位 <span class="right"><button class="linkbtn" id="btnRetryTop" onclick="retryFailed()" title="把投递失败的岗位（登录失效/风控/按钮没找到）重新排队投递">重投失败 <em id="retryFailN" style="font-style:normal;color:#c92a2a"></em></button><span id="totalHint"></span></span></h3>
         <div class="applybar" id="applyBar" style="display:none">
           <b id="selCount">已选 0 条</b>
           <button class="btn btn-primary btn-sm" id="btnApply" onclick="applySelected()">投递选中岗位</button>
@@ -843,7 +843,7 @@
   <div class="modal" style="max-width:800px">
     <h3 id="logTitle">获取日志</h3>
     <div class="log" id="logBox" style="max-height:56vh"></div>
-    <div class="foot"><button class="btn" id="logClose">关闭</button></div>
+    <div class="foot"><button class="btn" id="logClose" onclick="closeLog()">关闭</button></div>
   </div>
 </div>
 
@@ -1945,6 +1945,27 @@ async function applySelected(){
   const r=await(await fetch('/api/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_ids:ids})})).json();
   toast(r.msg);if(r.ok){applyRunning=true;pollApply()}
 }
+/* 一键重投：把投递失败的岗位重新排队（登录失效/风控/按钮没找到，岗位本身没下架的都能重来） */
+async function retryFailed(){
+  if(applyRunning){toast('投递进行中');return}
+  const n=+(document.getElementById('retryFailN').dataset.n||0);
+  if(!n){toast('当前没有投递失败的岗位');return}
+  const d=await uiDialog({title:'重新投递失败的岗位',okText:`重投 ${n} 条`,danger:true,
+    html:`<div class="note warn">会真实向 HR 发起打招呼，无法撤回。</div>
+      <p>共 ${n} 条投递失败的岗位将重新排队（单批上限按配置截取）。</p>
+      <ul><li>登录失效/风控导致的失败也能重投</li><li>岗位确实已下架的不建议重投（会再次失败）</li></ul>`});
+  if(!d.ok)return;
+  const r=await(await fetch('/api/apply_retry',{method:'POST'})).json();
+  toast(r.msg);if(r.ok){applyRunning=true;pollApply()}
+}
+/* 刷新「重投失败 N」徽标：从 /api/counts 拿失败数 */
+async function refreshRetryBadge(){
+  try{
+    const c=await(await fetch('/api/counts')).json();
+    const el=document.getElementById('retryFailN');
+    if(el){el.textContent=c.apply_failed?('· '+c.apply_failed):'';el.dataset.n=c.apply_failed||0}
+  }catch(e){}
+}
 async function applyOne(jid){
   if(applyRunning){toast('投递进行中');return}
   const d=await uiDialog({title:'确认投递',okText:'投递',danger:true,
@@ -1965,7 +1986,7 @@ function pollApply(){
     document.getElementById('btnApply').disabled=s.running;
     if(s.running){applyRunning=true;setRunState('投递中','run')}
     else{applyRunning=false;clearInterval(applyTimer);document.getElementById('btnApply').disabled=false;
-      setRunState('空闲','ok');loadJobs(curPage);loadApps();getLoginState()}
+      setRunState('空闲','ok');loadJobs(curPage);loadApps();getLoginState();refreshRetryBadge()}
   },3000);
 }
 async function stopApply(){const r=await(await fetch('/api/apply_cancel',{method:'POST'})).json();toast(r.msg)}
@@ -2374,24 +2395,29 @@ function bindMapSeg(){
 
 /* ========== 启动 ========== */
 (async()=>{
+  // 启动链加固：任何一步接口卡死/报错，都不能阻断后面的初始化。
+  // 曾经的坑：/api/applications 被数据库锁挂住 → await 永久 pending →
+  // 登录态不刷新（一直显示未登录）+ 弹窗关闭事件不绑定（日志弹窗关不掉）。
+  const safe=f=>Promise.resolve().then(f).catch(e=>console.warn('[boot] step skipped:',e));
   bindCityPicker();
   bindSeg();
   bindMapSeg();
-  await loadLpCities();
+  await safe(()=>loadLpCities());
   // 更多筛选：恢复上次展开状态 + 下拉改动即生效
   try{if(localStorage.getItem('fMoreOpen')==='1')toggleMore(true)}catch(e){}
   const fm=document.getElementById('fMore');
   if(fm)fm.addEventListener('change',e=>{if(e.target&&e.target.tagName==='SELECT')applyFilters()});
-  await loadCities();
-  await loadConfig();
-  await refreshFilters();
-  await loadJobs(1);
-  await refreshReplyBadge();
-  await loadRuns();
-  await loadApps();
-  await getLoginState();
-  await getLpLoginState();
-  await refreshRisk();
+  await safe(()=>loadCities());
+  await safe(()=>loadConfig());
+  await safe(()=>refreshFilters());
+  await safe(()=>loadJobs(1));
+  await safe(()=>refreshRetryBadge());
+  await safe(()=>refreshReplyBadge());
+  await safe(()=>loadRuns());
+  await safe(()=>loadApps());
+  await safe(()=>getLoginState());
+  await safe(()=>getLpLoginState());
+  await safe(()=>refreshRisk());
   setInterval(refreshRisk,15000);
   document.getElementById('logClose').onclick=closeLog;
   document.getElementById('logMask').onclick=e=>{if(e.target.id==='logMask')closeLog()};
@@ -2409,15 +2435,16 @@ function bindMapSeg(){
     if(vis('progMask')){hideProgress();return}
   };
   const cc=document.getElementById('cfgCard');
-  cc.addEventListener('input',markDirty);cc.addEventListener('change',e=>{markDirty();
+  if(cc){cc.addEventListener('input',markDirty);cc.addEventListener('change',e=>{markDirty();
     if(e.target&&(e.target.id==='cfgBossEnabled'||e.target.id==='cfgLiepinEnabled'||e.target.id==='cfgLiepinPages')){
       PLAT_STATE=enabledPlatsFrom(cfgBossEnabled.value,cfgLiepinEnabled.value);
-      LP_PAGES=+cfgLiepinPages.value||2;renderPlatSummary();platWarnHint();updateCrawlHint();}});
-  const ds=await(await fetch('/api/details_status')).json();if(ds.running)pollDetails();
-  const st=await(await fetch('/api/status')).json();
+      LP_PAGES=+cfgLiepinPages.value||2;renderPlatSummary();platWarnHint();updateCrawlHint();}});}
+  const ds=await safe(async()=>{const r=await(await fetch('/api/details_status')).json();if(r.running)pollDetails();});
+  const st=await safe(async()=>(await fetch('/api/status')).json())||{};
   // 刷新/重开页面时若还在抓取：直接接管进度（胶囊常驻，点它可打开弹窗）
   if(st.running){clearInterval(progTimer);progTimer=setInterval(tickProgress,1200);tickProgress();pollStatus();}
-  const ap=await(await fetch('/api/apply_status')).json();if(ap.running){applyRunning=true;pollApply()}
+  const ap=await safe(async()=>(await fetch('/api/apply_status')).json())||{};
+  if(ap.running){applyRunning=true;pollApply()}
 })();
 </script>
 </body>
