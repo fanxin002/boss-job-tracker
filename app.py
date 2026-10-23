@@ -1216,6 +1216,9 @@ def api_apply(body: ApplyIn):
 @app.post("/api/apply_retry")
 def api_apply_retry():
     """一键重投：把投递失败（applied=2）的岗位重新排队（登录失效/风控失败的都能重投）"""
+    st = crawler.get_login_state()
+    if not st.get("logged"):
+        return {"ok": False, "msg": "未登录 BOSS：请先点顶部「BOSS」胶囊修复登录态，再重投（否则起了批也会秒退）"}
     ids = db.failed_apply_ids(source="boss", limit=int(db.get_config().get("apply_max_batch") or 20))
     if not ids:
         return {"ok": False, "msg": "当前没有投递失败的岗位"}
