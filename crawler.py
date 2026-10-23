@@ -225,10 +225,24 @@ def cookies_logged(page) -> bool:
 
 
 def set_login_state(ok, note=""):
+    """原子写状态文件（曾经的坑：open(w) 先截断再写，进程在中间被杀/异常
+    → 留下 0 字节空文件，get_login_state 解析失败显示「未登录」，用户以为掉登录。
+    2026-10-23 一天内踩了两次，改临时文件 + os.replace 保证原子性）"""
     import json as _json
+    import tempfile
     from datetime import datetime as _dt
-    _json.dump({"logged": bool(ok), "at": _dt.now().strftime("%Y-%m-%d %H:%M:%S"), "note": note},
-               open(STATE_FILE, "w", encoding="utf-8"))
+    payload = {"logged": bool(ok), "at": _dt.now().strftime("%Y-%m-%d %H:%M:%S"), "note": note}
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(STATE_FILE), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            _json.dump(payload, f, ensure_ascii=False)
+        os.replace(tmp, STATE_FILE)   # 同分区原子替换，不留半截文件
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except Exception:
+            pass
+        raise
 
 
 def _login_open():
@@ -245,8 +259,11 @@ def get_login_state():
     import json as _json
     try:
         st = _json.load(open(STATE_FILE, encoding="utf-8"))
+        if not isinstance(st, dict):
+            raise ValueError("not a dict")
     except Exception:
-        st = {"logged": False, "at": "", "note": ""}
+        # 状态文件损坏/为空（曾经的坑：非原子写被杀断）→ 不假装登录，明确指引
+        st = {"logged": False, "at": "", "note": "状态文件损坏，点「修复」刷新登录态", "stale": True}
     # 交叉校验：状态文件说已登录，但 Cookie 里没有 wt2/bsti → 实际是游客态，
     # 这里必须纠正，否则界面显示「已登录」而获取立刻报未登录（用户会以为坏了）
     if st.get("logged") and not cookies_have_login():
