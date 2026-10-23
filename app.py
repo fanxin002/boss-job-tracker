@@ -1213,6 +1213,26 @@ def api_apply(body: ApplyIn):
     return {"ok": True, "msg": f"已启动投递 {len(valid)} 条{extra}（后台静默，日志实时可见）"}
 
 
+@app.post("/api/apply_retry")
+def api_apply_retry():
+    """一键重投：把投递失败（applied=2）的岗位重新排队（登录失效/风控失败的都能重投）"""
+    ids = db.failed_apply_ids(source="boss", limit=int(db.get_config().get("apply_max_batch") or 20))
+    if not ids:
+        return {"ok": False, "msg": "当前没有投递失败的岗位"}
+    if _state["running"]:
+        return {"ok": False, "msg": "获取进行中，请等本轮结束再投递"}
+    risk = db.get_risk()
+    if risk["active"]:
+        return {"ok": False, "msg": _risk_block_msg(risk)}
+    with _apply_lock:
+        if _apply_state["running"]:
+            return {"ok": False, "msg": "已有投递在运行"}
+    cfg = db.get_config()
+    t = threading.Thread(target=_do_apply, args=[ids, (cfg.get("greeting") or "").strip()], daemon=True)
+    t.start()
+    return {"ok": True, "msg": f"已重新投递 {len(ids)} 条失败岗位（后台静默）"}
+
+
 @app.get("/api/apply_status")
 def api_apply_status():
     with _apply_lock:
