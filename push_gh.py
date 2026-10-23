@@ -6,8 +6,8 @@ TOKEN = os.environ.get("GH_TOKEN", "")
 OWNER, REPO, BRANCH = "fanxin002", "boss-job-tracker", "main"
 API = f"https://api.github.com/repos/{OWNER}/{REPO}/contents"
 ROOT = os.path.dirname(os.path.abspath(__file__))
-FILES = ["README.md", "static/index.html", "e2e_test.py", "push_gh.py"]
-MSG = "feat: skeleton loading UI (idle/loading/success/error) for job detail + tables, respects reduced-motion"
+FILES = ["static/index.html", "e2e_test.py", "push_gh.py"]
+MSG = "polish: softer skeleton shimmer (soft-edge gradient, 1.2s linear) + status line + fix missing sk-swap transition"
 
 
 def req(url, data=None, method=None):
