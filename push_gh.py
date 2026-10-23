@@ -6,8 +6,8 @@ TOKEN = os.environ.get("GH_TOKEN", "")
 OWNER, REPO, BRANCH = "fanxin002", "boss-job-tracker", "main"
 API = f"https://api.github.com/repos/{OWNER}/{REPO}/contents"
 ROOT = os.path.dirname(os.path.abspath(__file__))
-FILES = ["apply.py", "e2e_test.py", "push_gh.py"]
-MSG = "fix: detect expired BOSS session (error.html code=7) before apply - was misreported as job offline"
+FILES = ["apply.py", "app.py", "db.py", "static/index.html", "e2e_test.py", "push_gh.py"]
+MSG = "feat: one-click retry for failed applies; stop falsely marking jobs offline on any failure msg"
 
 
 def req(url, data=None, method=None):
