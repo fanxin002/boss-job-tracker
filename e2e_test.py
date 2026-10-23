@@ -313,6 +313,10 @@ def main():
     check("骨架-尊重减动效", "@media (prefers-reduced-motion: reduce)" in _html
           and "animation:none" in _html)
     check("骨架-过渡时长650ms", ".65s" in _html)
+    # 参考 Motion Lab 的质感要点：渐变两端完全透明（柔和波纹，不是硬白条）+ 明确状态文案
+    check("骨架-扫光渐变边缘柔化", "rgba(255,255,255,0) 36%" in _html)
+    check("骨架-有加载状态文案", 'id="jobSkStatus"' in _html and 'role="status"' in _html)
+    check("骨架-内容层带过渡类", 'id="jobContent" class="sk-swap"' in _html)
     # 投递过即进 HR 回复页（waiting 口径）
     check("回复-接口含waiting字段", "waiting" in client.get("/api/replies?limit=1").json())
 
