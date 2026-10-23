@@ -428,6 +428,11 @@ def main():
     importlib.reload(applymod)  # 还原被第11节 monkeypatch 的 run_apply
     check("投递-apply模块结构完整", hasattr(applymod, "run_apply") and hasattr(applymod, "apply_one")
           and hasattr(applymod, "_click_and_confirm"))
+    # BOSS 前端改版：按钮 class 是 btn-startchat（旧 btn-start-talk 已失效），
+    # 且必须用 a 标签选择器优先（父容器 div.btn-startchat-wrap 也含同样文字）
+    _sels = getattr(applymod, "_START_CHAT_SELECTORS", ())
+    check("投递-按钮选择器含新版class", any("btn-startchat" in s for s in _sels)
+          and _sels and _sels[0].startswith("x://a["), str(_sels[:2]))
 
     # 已投递岗位在批量中跳过（不产生新记录）
     db.upsert_jobs([mk("S2", "10K")], rid2)
