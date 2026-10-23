@@ -217,10 +217,14 @@ def run_apply(job_ids, greeting, logf, batch_id, max_batch=20, interval=(12, 30)
                 logf(f"      ✅ {msg}")
             else:
                 fail_cnt += 1
-                if "已下架" not in msg:  # 下架属正常业务情况，不计入风控熔断
-                    consecutive_fail += 1
-                else:
+                # 只有「页面明确显示岗位已下架」（apply_one 的确切 offline 消息）才同步
+                # 下线状态。曾经的坑：只要失败消息里含「已下架」字样就 mark_job_offline，
+                # 而登录失效时的误报消息（"岗位可能不可聊/已下架"）也含这个词
+                # → 好岗位被冤成下线（用户 2026-10-23 实际踩过）。下架不计入熔断。
+                if msg.startswith("岗位已下架"):
                     db.mark_job_offline(j["job_id"])
+                else:
+                    consecutive_fail += 1
                 logf(f"      ❌ {msg}")
                 if consecutive_fail >= 3:
                     logf("⛔ 连续3条失败，停止本批（疑似风控/登录失效），未投递的岗位不受影响")
