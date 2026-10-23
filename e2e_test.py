@@ -494,6 +494,39 @@ def main():
     _st_ok = applymod._page_state(_FakeTab(url="https://www.zhipin.com/job_detail/x.html", text="数据分析师 15-20K"))
     check("投递-正常页面不误判", _st_ok is None, str(_st_ok))
 
+    # ---- 19c. 重投失败：failed_apply_ids + 接口 + 冤下线修复 ----
+    db.upsert_jobs([mk("RF1"), mk("RF2")], rid2)
+    db.set_applied(["RF1", "RF2"], 2)          # 标为投递失败
+    db.set_applied(["A"], 1)                    # A 是成功的，不应被重投
+    _fids = db.failed_apply_ids(source="boss", limit=50)
+    check("重投-只取失败岗位", set(_fids) >= {"RF1", "RF2"} and "A" not in _fids, str(_fids))
+    # patch 掉 _do_apply：避免测试真的起投递线程（会开真浏览器）
+    _real_do_apply = appmod._do_apply
+
+    def _fake_do_apply(ids, greeting):
+        with appmod._apply_lock:
+            appmod._apply_state["running"] = False   # 模拟 finally 复位
+    appmod._do_apply = _fake_do_apply
+    try:
+        r = client.post("/api/apply_retry")
+        check("重投-接口可用", r.status_code == 200 and r.json().get("ok") is True,
+              r.text[:80])
+        time.sleep(0.5)   # 等 fake 线程跑完复位
+        # 有投递在运行时再点应被拒（不重复起批）
+        with appmod._apply_lock:
+            appmod._apply_state["running"] = True
+        r2 = client.post("/api/apply_retry")
+        check("重投-运行中拒绝", r2.json()["ok"] is False, r2.json().get("msg", ""))
+        with appmod._apply_lock:
+            appmod._apply_state["running"] = False
+        # 无失败岗位时应给出明确提示（清掉全部失败态，含前面测试遗留的）
+        db.set_applied(db.failed_apply_ids(source="boss", limit=100), 0)
+        r3 = client.post("/api/apply_retry")
+        check("重投-无失败岗位时提示", r3.json()["ok"] is False and "没有投递失败" in r3.json()["msg"],
+              r3.json().get("msg", ""))
+    finally:
+        appmod._do_apply = _real_do_apply
+
     # ---- 20. 风控冷却锁：命中后禁止重跑，避免连续请求延长封控 ----
     db.clear_risk()
     check("风控锁-初始未锁定", db.get_risk()["active"] is False)
@@ -613,6 +646,7 @@ def main():
     c0 = client.get("/api/counts").json()
     need = ("total", "active", "offline", "new", "applied", "salary_missing", "desc_done", "starred", "replied")
     check("计数-字段齐全", all(k in c0 for k in need), str(list(c0.keys())))
+    check("计数-含投递失败数", "apply_failed" in c0, str(list(c0.keys())))
     r5 = client.get("/api/jobs?page=1&size=5").json()
     check("计数-列表响应带 counts", "counts" in r5 and r5["counts"]["total"] == c0["total"])
 
