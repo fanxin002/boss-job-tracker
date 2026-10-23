@@ -1267,6 +1267,24 @@ def main():
     except ImportError:
         check("隐私-推送脚本可导入", False, "push_gh 导入失败")
 
+    # ---- 22. 外网访问口令门禁（内网穿透时用；本机直连不受影响） ----
+    _akey = ""
+    try:
+        _akey = open(appmod._ACCESS_FILE, encoding="utf-8").read().strip()
+    except OSError:
+        _akey = ""
+    _PROXY = {"cf-connecting-ip": "203.0.113.9", "cf-ray": "e2e-test"}
+    if _akey:
+        r = client.get("/api/counts", headers=_PROXY)
+        check("口令-隧道无口令被拦", r.status_code == 401 and "访问口令" in r.text, str(r.status_code))
+        check("口令-本机直连免口令", client.get("/api/counts").status_code == 200)
+        r = client.post("/__login", data={"k": "wrong-key"}, headers=_PROXY)
+        check("口令-错口令被拒", r.status_code == 401, str(r.status_code))
+        client.post("/__login", data={"k": _akey}, headers=_PROXY)   # 种 cookie
+        check("口令-登录后可访问", client.get("/api/counts", headers=_PROXY).status_code == 200)
+    else:
+        check("口令-未配置时完全放行", client.get("/api/counts").status_code == 200)
+
     # ---- 汇总 ----
     passed = sum(1 for s, *_ in RESULTS if s == "PASS")
     failed = [n for s, n, d in RESULTS if s == "FAIL"]
