@@ -6,8 +6,8 @@ TOKEN = os.environ.get("GH_TOKEN", "")
 OWNER, REPO, BRANCH = "fanxin002", "boss-job-tracker", "main"
 API = f"https://api.github.com/repos/{OWNER}/{REPO}/contents"
 ROOT = os.path.dirname(os.path.abspath(__file__))
-FILES = ["apply.py", "e2e_test.py", "push_gh.py"]
-MSG = "fix: BOSS renamed apply button class to btn-startchat - old btn-start-talk selector never matched"
+FILES = ["README.md", "app.py", "db.py", "static/index.html", "e2e_test.py", "push_gh.py"]
+MSG = "feat: HR reply page shows applied jobs immediately (waiting/replied states), no need to wait for reply"
 
 
 def req(url, data=None, method=None):
