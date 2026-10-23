@@ -974,7 +974,7 @@
       <button class="btn btn-sm" onclick="clearNextAt()">清除</button>
     </div>
     <div class="foot">
-      <a class="btn btn-sm" id="jobOpen" target="_blank" style="color:var(--ink);text-decoration:none;display:inline-flex;align-items:center">在 BOSS 打开</a>
+      <a class="btn btn-sm" id="jobOpen" target="_blank" rel="noopener" style="color:var(--ink);text-decoration:none;display:inline-flex;align-items:center">打开原页</a>
       <button class="btn btn-sm" onclick="saveNote()">保存备注</button>
       <button class="btn btn-sm" id="jobReplyBtn" onclick="toggleRepliedFromJob()">标记 HR 已回复</button>
       <button class="btn btn-primary btn-sm" id="jobApplyBtn" onclick="applyFromJob()">投递这个岗位</button>
@@ -2043,9 +2043,19 @@ function renderJob(j){
   ].filter(Boolean).join(' <span style="color:var(--hairline-strong)">|</span> ');
   document.getElementById('jobDesc').textContent=j.detail_text||'暂无职位描述，可用「补抓描述」补全';
   document.getElementById('jobNote').value=j.note||'';
-  document.getElementById('jobOpen').href=j.job_url||'#';
-  const b=document.getElementById('jobApplyBtn');
   const _isLp=(j.source||'boss')==='liepin';
+  // 打开原页：文案/链接必须跟平台一致（曾经写死「在 BOSS 打开」，猎聘岗位点进去像跳到 BOSS）
+  const openA=document.getElementById('jobOpen');
+  if(j.job_url){
+    openA.style.display='';
+    openA.href=j.job_url;
+    openA.textContent=_isLp?'在猎聘打开':'在 BOSS 打开';
+    openA.title=_isLp?'在猎聘官网打开该岗位':'在 BOSS 直聘打开该岗位';
+  }else{
+    openA.style.display='none';
+    openA.removeAttribute('href');
+  }
+  const b=document.getElementById('jobApplyBtn');
   b.disabled=_isLp||j.applied===1||j.status==='offline';
   b.textContent=_isLp?'猎聘请到官网投递':(j.applied===1?'已投递过':(j.status==='offline'?'岗位已下线':'投递这个岗位'));
   const rb=document.getElementById('jobReplyBtn');
