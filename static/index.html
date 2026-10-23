@@ -417,28 +417,53 @@
      - prefers-reduced-motion 下关闭扫光，内容切换也不做过渡 */
   .sk{
     display:block;position:relative;overflow:hidden;
-    background:#eef0f2;border-radius:6px;
+    /* 底色本身带轻微纵向明暗，避免"一块死灰"的塑料感 */
+    background:linear-gradient(180deg,#e9ebee,#edeff2);
+    border-radius:6px;
   }
+  /* 扫光：参考 Motion Lab 的「同色系宽柔渐变流动」，而不是硬白斜条。
+     做法：渐变里白色只占中间 20%、两侧完全透明 → 扫过时是"波纹"不是"闪光"；
+     保留在 ::after 上做 transform 动画（GPU 合成），不用 background-position（会重绘）。 */
   .sk::after{
-    content:'';position:absolute;inset:0;pointer-events:none;
-    background:linear-gradient(100deg,
-      transparent 20%, rgba(255,255,255,.72) 50%, transparent 80%);
+    content:'';position:absolute;top:0;bottom:0;left:0;right:0;pointer-events:none;
+    background:linear-gradient(102deg,
+      rgba(255,255,255,0) 36%,
+      rgba(255,255,255,.42) 46%,
+      rgba(255,255,255,.72) 50%,
+      rgba(255,255,255,.42) 54%,
+      rgba(255,255,255,0) 64%);
     transform:translateX(-100%);
-    animation:sk-sweep 1.4s ease-in-out infinite;
-    will-change:transform;
+    animation:sk-sweep 1.2s linear infinite;   /* 匀速，避免快慢不均的"假"感 */
   }
   @keyframes sk-sweep{ to{ transform:translateX(100%);} }
-  /* 骨架条（文本行用）：高度=行高，宽度按层级 */
-  .sk-line{height:12px;margin-bottom:8px}
+  /* 骨架块的出现也带轻微错位，让结构"长出来"而不是一次性闪现 */
+  .sk-line,.sk-title,.sk-tag,.sk-block{animation:sk-rise .35s cubic-bezier(.22,1,.36,1) backwards}
+  @keyframes sk-rise{ from{opacity:.55;transform:translateY(3px)} to{opacity:1;transform:none} }
+  /* 骨架条（文本行用）：高度=行高，宽度按层级；行距略宽，避免"挤在一起"的廉价感 */
+  .sk-line{height:12px;margin-bottom:10px}
   .sk-line.w90{width:90%} .sk-line.w75{width:75%} .sk-line.w60{width:60%} .sk-line.w40{width:40%}
   .sk-title{height:22px;width:52%;border-radius:7px;margin-bottom:12px}
   .sk-tag{height:24px;width:76px;border-radius:12px;display:inline-block;margin:0 8px 8px 0}
   .sk-block{height:120px;border-radius:10px}
   .sk-row{display:flex;gap:12px;align-items:center;padding:10px 0}
   .sk-row .sk{flex:none}
-  /* 四态容器：loading→success 柔和替换（约 650ms 主过渡）*/
+  /* 四态容器：loading→success 柔和替换（650ms 主过渡 + 轻微位移/缩放做阻尼感）*/
   .sk-swap{transition:opacity .65s cubic-bezier(.22,1,.36,1), transform .65s cubic-bezier(.22,1,.36,1)}
-  .sk-swap.in{opacity:0;transform:translateY(4px)}
+  .sk-swap.in{opacity:0;transform:translateY(6px) scale(.995)}
+  /* 加载状态行：明确"正在做什么"，不是只有一堆灰块 */
+  .sk-status{
+    display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);
+    margin-bottom:12px;
+  }
+  .sk-status::before{
+    content:'';flex:none;width:10px;height:10px;border-radius:50%;
+    border:2px solid #d6d9de;border-top-color:#8a9199;
+    animation:sk-spin .8s linear infinite;
+  }
+  .sk-status.warn::before{border-color:#f0c36d;border-top-color:#b45309;animation:none}
+  @keyframes sk-spin{ to{ transform:rotate(360deg);} }
+  /* 弹窗最小高度：骨架与内容尺寸接近，加兜底避免切换时高度大幅塌陷 */
+  #jobMask .modal{min-height:520px}
   .sk-err{
     display:flex;align-items:center;gap:14px;padding:18px 16px;border-radius:10px;
     background:#fffafa;border:1px solid #f5d5d5;color:#8a3b3b;font-size:13px;
@@ -452,6 +477,8 @@
   .sk-retry:focus-visible{outline:2px solid #c92a2a;outline-offset:2px}
   @media (prefers-reduced-motion: reduce){
     .sk::after{animation:none;opacity:0}          /* 关闭扫光 */
+    .sk-line,.sk-title,.sk-tag,.sk-block{animation:none}
+    .sk-status::before{animation:none;border-top-color:#d6d9de}
     .sk-swap{transition:none}                      /* 关闭替换动效 */
   }
 </style>
@@ -839,6 +866,7 @@
   <div class="modal" style="max-width:820px">
     <!-- 骨架层：尺寸刻意做成与最终内容一致（标题 22px / 标签 24px / 描述块 / 输入框 / 按钮），切换时不跳动 -->
     <div id="jobSkeleton">
+      <div class="sk-status" role="status" id="jobSkStatus">正在读取岗位信息…</div>
       <div class="sk sk-title"></div>
       <div style="margin-bottom:14px">
         <span class="sk sk-tag"></span><span class="sk sk-tag"></span>
@@ -861,7 +889,7 @@
       </div>
       <div class="muted" style="margin-top:12px;font-size:12px">也可以关闭后刷新页面再试；列表里的信息不会丢。</div>
     </div>
-    <div id="jobContent" style="display:none">
+    <div id="jobContent" class="sk-swap" style="display:none">
     <div class="jobhead">
       <div style="display:flex;gap:16px;align-items:flex-start">
         <div style="flex:1;min-width:0"><b id="jobTitle"></b><div class="jobmeta" id="jobMeta"></div></div>
@@ -1917,6 +1945,8 @@ function setJobState(state, msg){
     er.style.display='none';
     ct.style.display='none'; ct.classList.remove('in');
     sk.style.display='';
+    const st=document.getElementById('jobSkStatus');
+    if(st){st.className='sk-status';st.textContent='正在读取岗位信息…'}
   }else if(state==='error'){
     sk.style.display='none';
     ct.style.display='none';
