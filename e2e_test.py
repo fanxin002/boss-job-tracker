@@ -442,12 +442,22 @@ def main():
     applymod.apply_one = fake_apply_one
     fake_page = object()
     real_ensure, real_inject, real_close = crawler.ensure_browser, crawler.inject_cookies, crawler._close_browser
+    real_probe = crawler.probe_api
     crawler.ensure_browser = lambda headless=False, offscreen=False: fake_page
     crawler.inject_cookies = lambda p: None
     crawler._close_browser = lambda: None
+    crawler.probe_api = lambda p, k, c: (0, "")   # 前置探测：默认放行
     try:
         ok, fail = applymod.run_apply(["S2"], "", lambda s: None, "batch_skip")
         check("投递-已投递岗位跳过", ok == 0 and fail == 0 and calls["n"] == 0, f"ok={ok} calls={calls['n']}")
+        # 登录态失效（接口 401）→ 整批不开始，不产生任何投递记录（2026-10-23 修复）
+        crawler.probe_api = lambda p, k, c: (401, "登录失效")
+        n_before_401 = len(db.get_applications())
+        calls["n"] = 0
+        ok, fail = applymod.run_apply(["S1"], "", lambda s: None, "batch_401", max_batch=5, interval=(0, 0))
+        check("投递-登录失效整批拒绝", ok == 0 and fail == 1 and calls["n"] == 0
+              and len(db.get_applications()) == n_before_401, f"ok={ok} fail={fail} calls={calls['n']}")
+        crawler.probe_api = lambda p, k, c: (0, "")
         ok, fail = applymod.run_apply(["S1"], "", lambda s: None, "batch_off")  # S1已下线但applied=0 → 会尝试
         # 下架岗位由页面检测返回，这里fake直接成功，只验证链路不断
         # 单批上限截取
@@ -459,6 +469,30 @@ def main():
     finally:
         applymod.apply_one = real_one
         crawler.ensure_browser, crawler.inject_cookies, crawler._close_browser = real_ensure, real_inject, real_close
+        crawler.probe_api = real_probe
+
+    # ---- 19b. _page_state 识别登录失效页（2026-10-23：wt2 过期被误报成岗位下架）----
+    class _FakeBody:
+        def __init__(self, t):
+            self.text = t
+
+    class _FakeTab:
+        def __init__(self, url="", text=""):
+            self.url = url
+            self._text = text
+
+        def ele(self, loc, timeout=0):
+            return _FakeBody(self._text) if loc == "tag:body" else None
+
+    _st_err_url = applymod._page_state(_FakeTab(
+        url="https://www.zhipin.com/web/passport/zp/error.html?code=7"))
+    check("投递-识别登录失效跳转页", str(_st_err_url).startswith("blocked")
+          and "登录" in str(_st_err_url), str(_st_err_url))
+    _st_err_txt = applymod._page_state(_FakeTab(
+        url="https://www.zhipin.com/job_detail/x.html", text="抱歉 当前登录状态已失效 返回首页"))
+    check("投递-识别登录失效正文", str(_st_err_txt).startswith("blocked"), str(_st_err_txt))
+    _st_ok = applymod._page_state(_FakeTab(url="https://www.zhipin.com/job_detail/x.html", text="数据分析师 15-20K"))
+    check("投递-正常页面不误判", _st_ok is None, str(_st_ok))
 
     # ---- 20. 风控冷却锁：命中后禁止重跑，避免连续请求延长封控 ----
     db.clear_risk()
