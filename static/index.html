@@ -13,13 +13,28 @@
   :root{
     --primary:#1c69d4; --primary-active:#0653b6; --primary-disabled:#d6d6d6;
     --ink:#262626; --body:#3c3c3c; --body-strong:#1a1a1a; --muted:#6b6b6b; --muted-soft:#9a9a9a;
-    --hairline:#e6e6e6; --hairline-strong:#cccccc;
+    --hairline:#e6e8ec; --hairline-strong:#d5d8de;
     --canvas:#ffffff; --surface-soft:#f7f7f7; --surface-card:#fafafa; --surface-strong:#ebebeb;
     --surface-dark:#1a2129; --surface-dark-elevated:#262e38;
     --on-primary:#fff; --on-dark:#fff; --on-dark-soft:#bbbbbb;
     --success:#22c55e; --warning:#f59e0b; --error:#dc2626;
     --ff:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","微软雅黑",
          "Helvetica Neue",Arial,Helvetica,sans-serif;
+
+    /* ===== 形状尺度（全站唯一一套，13 种散落圆角收敛到这 5 档）=====
+       原实现全站控件都是直角，筛选区/下拉"太方正"；这里统一柔化并锁定。 */
+    --r-xs:6px;      /* 小标签、骨架块、微元素 */
+    --r-sm:8px;      /* 输入框、下拉、按钮 */
+    --r-md:12px;     /* 卡片、面板、下拉菜单 */
+    --r-lg:16px;     /* 弹窗、大卡片 */
+    --r-full:999px;  /* 胶囊：平台 chip、分页、数字徽标 */
+    /* 控件高度 */
+    --ctl-h:40px; --ctl-h-sm:32px; --ctl-h-xs:28px;
+    /* 交互反馈（统一过渡与焦点环，避免各处各写一套）*/
+    --ease:cubic-bezier(.22,1,.36,1); --dur:.16s;
+    --ring:0 0 0 3px rgba(28,105,212,.15);
+    --shadow-card:0 1px 2px rgba(16,24,40,.04),0 10px 26px -16px rgba(16,24,40,.16);
+    --shadow-pop:0 12px 32px -12px rgba(16,24,40,.22),0 2px 6px rgba(16,24,40,.06);
   }
   *{box-sizing:border-box;margin:0;padding:0}
   html,body{height:100%}
@@ -41,7 +56,7 @@
   .navlinks a.on{color:var(--ink);border-bottom-color:var(--ink)}
   .navlinks a.on.brand-active{color:var(--primary);border-bottom-color:var(--primary)}
   .nav-badge{display:inline-block;margin-left:6px;padding:0 6px;min-width:18px;text-align:center;
-    font-size:11px;line-height:16px;background:var(--ink);color:#fff;border-radius:9px;vertical-align:1px}
+    font-size:11px;line-height:16px;background:var(--ink);color:#fff;border-radius:var(--r-full);vertical-align:1px}
   th.sortable{cursor:pointer;user-select:none}
   th.sortable:hover{color:var(--ink)}
   th.sortable.desc,th.sortable.asc{color:var(--ink)}
@@ -62,7 +77,8 @@
   .dot.ok{background:var(--success)} .dot.run{background:var(--warning)} .dot.err{background:var(--error)}
   /* 平台登录状态：一个平台一个胶囊，点击即登录该平台 */
   .platlogin{display:flex;gap:6px;align-items:center;margin-right:4px}
-  .pchip{display:flex;align-items:center;gap:6px;height:28px;padding:0 10px;border:1px solid var(--hairline);
+  .pchip{display:flex;align-items:center;gap:6px;height:var(--ctl-h-xs);padding:0 11px;border:1px solid var(--hairline);
+    border-radius:var(--r-full);
     background:var(--canvas);font-size:12px;color:var(--muted);cursor:pointer;white-space:nowrap}
   .pchip b{color:var(--ink);font-weight:700}
   .pchip:hover{border-color:var(--ink)}
@@ -78,15 +94,18 @@
   .dashnote.show{display:block}
 
   /* ---------- 按钮 ---------- */
-  button{border-radius:0;cursor:pointer;transition:background .12s,border-color .12s,color .12s;white-space:nowrap}
-  .btn{height:40px;padding:0 24px;font-size:14px;font-weight:700;letter-spacing:.5px;background:var(--canvas);
-    color:var(--ink);border:1px solid var(--hairline-strong)}
-  .btn:hover{border-color:var(--ink)}
+  button{border-radius:var(--r-sm);cursor:pointer;
+    transition:background-color var(--dur) var(--ease),border-color var(--dur) var(--ease),
+      color var(--dur) var(--ease),box-shadow var(--dur) var(--ease);white-space:nowrap}
+  button:focus-visible{outline:none;box-shadow:var(--ring)}
+  .btn{height:40px;padding:0 22px;font-size:14px;font-weight:700;letter-spacing:.4px;background:var(--canvas);
+    color:var(--ink);border:1px solid var(--hairline-strong);border-radius:var(--r-sm)}
+  .btn:hover{border-color:var(--ink);background:var(--surface-soft)}
   .btn-primary{background:var(--primary);color:var(--on-primary);border:1px solid var(--primary)}
   .btn-primary:hover{background:var(--primary-active);border-color:var(--primary-active)}
-  .btn-sm{height:32px;padding:0 14px;font-size:13px;letter-spacing:.2px}
+  .btn-sm{height:32px;padding:0 14px;font-size:13px;letter-spacing:.2px;border-radius:var(--r-xs)}
   .btn-danger{background:var(--canvas);color:var(--error);border:1px solid var(--hairline-strong)}
-  .btn-danger:hover{border-color:var(--error)}
+  .btn-danger:hover{border-color:var(--error);background:#fffafa}
   button:disabled{background:var(--primary-disabled);border-color:var(--primary-disabled);color:var(--muted);cursor:not-allowed}
   .linkbtn{background:none;border:none;color:var(--ink);font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;
     cursor:pointer;padding:0}
@@ -120,7 +139,8 @@
   .riskbar.show{display:flex}
   .riskbar b{color:var(--ink);font-weight:700}
 
-  .card{background:var(--canvas);border:1px solid var(--hairline);padding:24px;margin-bottom:16px}
+  .card{background:var(--canvas);border:1px solid var(--hairline);padding:24px;margin-bottom:16px;
+    border-radius:var(--r-md);box-shadow:var(--shadow-card)}
   .card > h3{font-size:12px;font-weight:700;letter-spacing:1.4px;text-transform:uppercase;color:var(--ink);
     margin-bottom:18px;display:flex;align-items:center;gap:10px}
   .card > h3 .right{margin-left:auto;font-weight:400;font-size:12px;letter-spacing:.2px;text-transform:none;color:var(--muted)}
@@ -130,30 +150,46 @@
 
   /* ---------- 表单 ---------- */
   label{display:block;font-size:12px;font-weight:400;color:var(--muted);margin:16px 0 6px;letter-spacing:.2px}
-  input[type=text],input[type=number],input[type=time],select,textarea{
-    width:100%;height:40px;padding:0 14px;border:1px solid var(--hairline-strong);border-radius:0;background:var(--canvas);
-    color:var(--ink);font-size:14px;font-weight:400;transition:border-color .12s}
-  textarea{height:auto;padding:10px 14px;line-height:1.6}
-  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--ink)}
+  input[type=text],input[type=number],input[type=time],input[type=date],input[type=datetime-local],
+  input[type=email],input[type=search],input[type=password],select,textarea{
+    width:100%;height:var(--ctl-h);padding:0 14px;border:1px solid var(--hairline-strong);
+    border-radius:var(--r-sm);background:var(--canvas);
+    color:var(--ink);font-size:14px;font-weight:400;
+    transition:border-color var(--dur) var(--ease),box-shadow var(--dur) var(--ease),background-color var(--dur) var(--ease)}
+  /* 下拉：去掉系统原生箭头（Windows 上是又小又硬的三角，跟整体不搭），换成与圆角一致的自绘箭头 */
+  select{
+    appearance:none;-webkit-appearance:none;-moz-appearance:none;
+    padding-right:38px;cursor:pointer;
+    background-image:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1.5 2.2L6 6.4l4.5-4.2' fill='none' stroke='%236b6b6b' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat:no-repeat;background-position:right 14px center;
+  }
+  select:hover{border-color:#b9bec7}
+  .card textarea{height:auto}
+  textarea{height:auto;padding:11px 14px;line-height:1.6}
+  input::placeholder,textarea::placeholder{color:#a8adb6}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--primary);box-shadow:var(--ring)}
   .row2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
   .row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
 
   /* ---------- 城市选择器 ---------- */
   .picker{position:relative}
-  .picker .box{display:flex;flex-wrap:wrap;gap:8px;align-items:center;min-height:40px;padding:5px 8px;
-    border:1px solid var(--hairline-strong);background:var(--canvas);cursor:text}
-  .picker .box.focus{border-color:var(--ink)}
-  .picker input{flex:1;width:auto;min-width:120px;height:28px;border:none;padding:0 6px;font-size:14px;font-weight:400;
-    outline:none;box-shadow:none!important;background:transparent}
+  .picker .box{display:flex;flex-wrap:wrap;gap:8px;align-items:center;min-height:var(--ctl-h);padding:5px 8px;
+    border:1px solid var(--hairline-strong);background:var(--canvas);cursor:text;border-radius:var(--r-sm);
+    transition:border-color var(--dur) var(--ease),box-shadow var(--dur) var(--ease)}
+  .picker .box.focus{border-color:var(--primary);box-shadow:var(--ring)}
+  .picker input{flex:1;width:auto;min-width:120px;height:var(--ctl-h-xs);border:none;padding:0 6px;font-size:14px;font-weight:400;
+    outline:none;box-shadow:none!important;background:transparent;border-radius:var(--r-xs)}
   .ctag.nolp{background:#fffaf0;border-color:#f0c36d;color:#b45309}
   .ctag{display:inline-flex;align-items:center;gap:6px;background:var(--surface-soft);border:1px solid var(--hairline);
     color:var(--ink);padding:2px 8px;font-size:13px;line-height:1.6}
   .ctag i{font-style:normal;cursor:pointer;color:var(--muted-soft);font-size:13px}
   .ctag i:hover{color:var(--error)}
-  .drop{position:absolute;left:0;right:0;top:calc(100% + 2px);background:var(--canvas);border:1px solid var(--hairline-strong);
-    max-height:260px;overflow:auto;z-index:20;display:none;padding:4px}
+  .drop{position:absolute;left:0;right:0;top:calc(100% + 4px);background:var(--canvas);border:1px solid var(--hairline);
+    border-radius:var(--r-md);box-shadow:var(--shadow-pop);
+    max-height:260px;overflow:auto;z-index:20;display:none;padding:6px}
   .drop.show{display:block}
-  .ditem{display:flex;align-items:center;gap:10px;padding:9px 12px;font-size:14px;font-weight:400;color:var(--body);cursor:pointer}
+  .ditem{display:flex;align-items:center;gap:10px;padding:9px 12px;font-size:14px;font-weight:400;color:var(--body);cursor:pointer;
+    border-radius:var(--r-xs)}
   .ditem:hover,.ditem.on{background:var(--surface-soft);color:var(--ink)}
   .ditem .p{color:var(--muted-soft);font-size:12px;margin-left:auto}
   .drop .none{padding:14px;color:var(--muted);font-size:13px;text-align:center}
@@ -166,19 +202,23 @@
   .opt.on{background:var(--ink);border-color:var(--ink);color:var(--on-dark);font-weight:700}
 
   /* ---------- 筛选 ---------- */
-  .filters{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:16px 16px}
+  /* 筛选区：给控件一块浅底分组面板，把"表单方阵"变成"分组区域"（控件本身已是圆角）
+     列数用 auto-fit 自适应：宽屏排满，窄屏自动减列，不再固定 6 列导致右侧大片空白 */
+  .filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:16px 16px;
+    background:var(--surface-soft);border:1px solid var(--hairline);
+    border-radius:var(--r-md);padding:18px}
   /* 更多筛选：默认收起，展开后占满一整行，避免 17 个控件把首屏吃掉 */
   .fmore{display:none;grid-column:1/-1;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;
     padding-top:16px;margin-top:4px;border-top:1px dashed var(--hairline)}
   .fmore.open{display:grid}
   @media (max-width:1100px){.fmore{grid-template-columns:repeat(2,minmax(0,1fr))}}
-  @media (max-width:1420px){.filters{grid-template-columns:repeat(3,minmax(0,1fr))}}
+  /* 已由 auto-fit 自适应，不再强制固定列数（原来 1420px 断点会让宽屏右侧空一大片） */
   .fcell{min-width:0}
-  .fcell label{margin:0 0 6px;font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted)}
-  .fchips{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:20px;padding-top:16px;border-top:1px solid var(--hairline)}
+  .fcell label{margin:0 0 6px;font-size:12px;font-weight:500;letter-spacing:0;color:var(--muted)}
+  .fchips{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:14px}
   .fchips .ph{font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted-soft);margin-right:6px}
   .fchip{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--hairline-strong);padding:4px 10px;
-    font-size:12px;color:var(--ink);background:var(--canvas)}
+    font-size:12px;color:var(--ink);background:var(--canvas);border-radius:var(--r-full)}
   .fchip i{font-style:normal;cursor:pointer;color:var(--muted-soft)}
   .fchip i:hover{color:var(--error)}
 
@@ -193,7 +233,7 @@
   a{color:var(--primary);text-decoration:none}
   a:hover{text-decoration:underline}
   .tag{display:inline-block;padding:2px 8px;border:1px solid var(--hairline-strong);font-size:11px;line-height:1.6;
-    color:var(--muted);white-space:nowrap}
+    color:var(--muted);white-space:nowrap;border-radius:var(--r-xs)}
   .tag-new{background:var(--ink);border-color:var(--ink);color:var(--on-dark);font-weight:700;letter-spacing:.5px}
   .tag-off{border-color:var(--hairline);color:var(--muted-soft)}
   .tag-sal{border-color:var(--ink);color:var(--ink);font-weight:700}
@@ -236,10 +276,10 @@
   table.jobs th:nth-child(11),table.jobs td:nth-child(11){width:62px;white-space:nowrap}
   table.jobs th:nth-child(12),table.jobs td:nth-child(12){width:92px;text-align:center;white-space:nowrap}
   /* 平台图标列：图片形式，不占文字 */
-  .platicon{width:18px;height:18px;border-radius:5px;display:inline-block;vertical-align:-4px;
+  .platicon{width:18px;height:18px;border-radius:var(--r-xs);display:inline-block;vertical-align:-4px;
     box-shadow:0 1px 2px rgba(0,0,0,.14)}
   td.plat,th.plat{text-align:center}
-  .platicon.lg{width:20px;height:20px;border-radius:6px;vertical-align:-5px;margin-right:5px}
+  .platicon.lg{width:20px;height:20px;border-radius:var(--r-xs);vertical-align:-5px;margin-right:5px}
   .star{cursor:pointer;font-size:15px;line-height:1;color:#d4d4d8;background:none;border:none;padding:0 6px;height:auto}
   .star.on{color:#e6b800}
   .score{display:inline-block;min-width:26px;text-align:center;font-size:11px;font-weight:700;color:#111;
@@ -265,17 +305,19 @@
   .dash{display:flex;flex-direction:column;gap:20px}
   .dkpis{display:grid;grid-template-columns:repeat(4,1fr);gap:20px}
   @media (max-width:1100px){.dkpis{grid-template-columns:repeat(2,1fr)}}
-  .dk{background:var(--canvas);border:1px solid #ececec;border-radius:16px;padding:20px 22px}
+  .dk{background:var(--canvas);border:1px solid var(--hairline);border-radius:var(--r-md);padding:20px 22px;
+    box-shadow:var(--shadow-card)}
   .dk .lb{font-size:13px;color:#6b7280}
   .dk b{display:block;font-size:30px;font-weight:600;color:#111;margin-top:10px;letter-spacing:-.5px;
     font-variant-numeric:tabular-nums;line-height:1.2}
   .dk .dt{font-size:12.5px;margin-top:6px;color:#6b7280}
   .dk .dt.up{color:#15803d}
   .dk .dt.down{color:#b91c1c}
-  .dcard{background:var(--canvas);border:1px solid #ececec;border-radius:16px;padding:22px 24px}
+  .dcard{background:var(--canvas);border:1px solid var(--hairline);border-radius:var(--r-md);padding:22px 24px;
+    box-shadow:var(--shadow-card)}
   .dcard h3{font-size:17px;font-weight:600;color:#111;display:flex;align-items:center;gap:12px;margin-bottom:14px}
-  .seg{margin-left:auto;display:flex;gap:4px;background:#f4f4f5;padding:4px;border-radius:999px}
-  .seg button{border:none;background:transparent;border-radius:999px;height:30px;padding:0 16px;font-size:13px;
+  .seg{margin-left:auto;display:flex;gap:4px;background:#f4f4f5;padding:4px;border-radius:var(--r-full)}
+  .seg button{border:none;background:transparent;border-radius:var(--r-full);height:30px;padding:0 16px;font-size:13px;
     color:#525252;font-weight:400}
   .seg button:hover{color:#111}
   .seg button.on{background:#111;color:#fff}
@@ -288,8 +330,8 @@
   .gtitle.warn{color:#b45309}
   .gbrow{display:flex;align-items:center;gap:10px;padding:3px 0;font-size:12px}
   .gbl{flex:0 0 96px;color:var(--body);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .gbb{flex:0 0 200px;display:block;height:6px;background:#ececef;border-radius:3px;overflow:hidden}
-  .gbb i{display:block;height:100%;background:#111;border-radius:3px}
+  .gbb{flex:0 0 200px;display:block;height:6px;background:#ececef;border-radius:var(--r-full);overflow:hidden}
+  .gbb i{display:block;height:100%;background:#111;border-radius:var(--r-full)}
   .gtitle.warn+.gbrow .gbb i,.gapwrap>div:nth-child(2) .gbb i{background:#e8a33d}
   .gbn{flex:0 0 30px;text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
   /* 技能薪资分析 */
@@ -298,8 +340,8 @@
   .ssal td{padding:6px 4px;border-bottom:1px solid #f6f6f7;font-variant-numeric:tabular-nums;white-space:nowrap}
   .ssal tr:last-child td{border-bottom:none}
   .ssal .sk{color:var(--body);font-weight:600;white-space:normal}
-  .ssal .bar{display:block;height:6px;background:#ececef;border-radius:3px;overflow:hidden;min-width:60px}
-  .ssal .bar i{display:block;height:100%;border-radius:3px;background:#111}
+  .ssal .bar{display:block;height:6px;background:#ececef;border-radius:var(--r-full);overflow:hidden;min-width:60px}
+  .ssal .bar i{display:block;height:100%;border-radius:var(--r-full);background:#111}
   .ssal .bar i.pos{background:#c92a2a}   /* 溢价为正：该技能岗位更贵（红=涨，符合国内习惯）*/
   .ssal .bar i.neg{background:#2b8a3e}   /* 溢价为负：要求该技能的岗位反而更便宜 */
   .ssal .pm{font-weight:600}
@@ -319,8 +361,8 @@
   .brow2{display:grid;grid-template-columns:78px 1fr 46px;gap:10px;align-items:center;font-size:12.5px;
     margin-bottom:10px}
   .brow2 .bl{color:#404040;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .brow2 .bt{height:14px;background:#f4f4f5;border-radius:4px;overflow:hidden}
-  .brow2 .bt i{display:block;height:100%;border-radius:4px;background:#111}
+  .brow2 .bt{height:14px;background:#f4f4f5;border-radius:var(--r-full);overflow:hidden}
+  .brow2 .bt i{display:block;height:100%;border-radius:var(--r-full);background:#111}
   .brow2 .bt i.lime{background:#d8f36b}
   .brow2 b{text-align:right;font-weight:500;color:#404040;font-variant-numeric:tabular-nums}
 
@@ -335,11 +377,12 @@
   .mask{position:fixed;inset:0;background:rgba(26,33,41,.55);display:none;align-items:center;justify-content:center;
     z-index:40;padding:24px}
   .mask.show{display:flex}
-  .modal{background:var(--canvas);border:1px solid var(--hairline-strong);max-width:600px;width:100%;padding:32px}
+  .modal{background:var(--canvas);border:1px solid var(--hairline);max-width:600px;width:100%;padding:32px;
+    border-radius:var(--r-lg);box-shadow:var(--shadow-pop)}
   /* 获取进度弹窗 */
   .modal.prog{max-width:520px}
-  .progbar{height:10px;background:#eeeef1;border-radius:999px;overflow:hidden;margin:18px 0 10px}
-  .progbar i{display:block;height:100%;width:2%;background:var(--primary);border-radius:999px;
+  .progbar{height:10px;background:#eeeef1;border-radius:var(--r-full);overflow:hidden;margin:18px 0 10px}
+  .progbar i{display:block;height:100%;width:2%;background:var(--primary);border-radius:var(--r-full);
     transition:width .5s ease}
   .progline{display:flex;justify-content:space-between;align-items:baseline;font-size:13px;color:var(--body)}
   .progline b{font-size:20px;color:var(--ink);font-variant-numeric:tabular-nums}
@@ -348,7 +391,7 @@
   #progMask{z-index:36}
   /* 后台运行后的常驻进度胶囊（隐藏弹窗后的唯一回入口） */
   .progpill{position:fixed;right:24px;bottom:24px;z-index:46;display:none;align-items:center;gap:8px;
-    background:var(--ink);color:#fff;padding:10px 16px;border-radius:999px;font-size:12px;cursor:pointer;
+    background:var(--ink);color:#fff;padding:10px 16px;border-radius:var(--r-full);font-size:12px;cursor:pointer;
     box-shadow:0 10px 28px rgba(16,24,40,.22);user-select:none;transition:transform .12s,box-shadow .12s}
   .progpill.show{display:flex}
   .progpill:hover{transform:translateY(-1px);box-shadow:0 12px 32px rgba(16,24,40,.28)}
@@ -419,7 +462,7 @@
     display:block;position:relative;overflow:hidden;
     /* 底色本身带轻微纵向明暗，避免"一块死灰"的塑料感 */
     background:linear-gradient(180deg,#e9ebee,#edeff2);
-    border-radius:6px;
+    border-radius:var(--r-xs);
   }
   /* 扫光：参考 Motion Lab 的「同色系宽柔渐变流动」，而不是硬白斜条。
      做法：渐变里白色只占中间 20%、两侧完全透明 → 扫过时是"波纹"不是"闪光"；
@@ -442,9 +485,9 @@
   /* 骨架条（文本行用）：高度=行高，宽度按层级；行距略宽，避免"挤在一起"的廉价感 */
   .sk-line{height:12px;margin-bottom:10px}
   .sk-line.w90{width:90%} .sk-line.w75{width:75%} .sk-line.w60{width:60%} .sk-line.w40{width:40%}
-  .sk-title{height:22px;width:52%;border-radius:7px;margin-bottom:12px}
-  .sk-tag{height:24px;width:76px;border-radius:12px;display:inline-block;margin:0 8px 8px 0}
-  .sk-block{height:120px;border-radius:10px}
+  .sk-title{height:22px;width:52%;border-radius:var(--r-sm);margin-bottom:12px}
+  .sk-tag{height:24px;width:76px;border-radius:var(--r-md);display:inline-block;margin:0 8px 8px 0}
+  .sk-block{height:120px;border-radius:var(--r-md)}
   .sk-row{display:flex;gap:12px;align-items:center;padding:10px 0}
   .sk-row .sk{flex:none}
   /* 四态容器：loading→success 柔和替换（650ms 主过渡 + 轻微位移/缩放做阻尼感）*/
@@ -465,13 +508,14 @@
   /* 弹窗最小高度：骨架与内容尺寸接近，加兜底避免切换时高度大幅塌陷 */
   #jobMask .modal{min-height:520px}
   .sk-err{
-    display:flex;align-items:center;gap:14px;padding:18px 16px;border-radius:10px;
+    display:flex;align-items:center;gap:14px;padding:18px 16px;border-radius:var(--r-md);
     background:#fffafa;border:1px solid #f5d5d5;color:#8a3b3b;font-size:13px;
   }
   .sk-err b{color:#c92a2a}
   .sk-retry{
-    margin-left:auto;height:32px;padding:0 14px;border-radius:8px;cursor:pointer;
+    margin-left:auto;height:var(--ctl-h-sm);padding:0 14px;border-radius:var(--r-xs);cursor:pointer;
     border:1px solid #e2b6b6;background:#fff;color:#b02a2a;font-size:12.5px;
+    transition:background-color var(--dur) var(--ease),border-color var(--dur) var(--ease);
   }
   .sk-retry:hover{background:#fff5f5}
   .sk-retry:focus-visible{outline:2px solid #c92a2a;outline-offset:2px}
@@ -596,13 +640,13 @@
       </div>
 
       <div class="card">
-        <h3>岗位 <span class="right"><button class="linkbtn" id="btnRetryTop" onclick="retryFailed()" title="把投递失败的岗位（登录失效/风控/按钮没找到）重新排队投递" style="margin-right:16px">重投失败<em id="retryFailN" style="font-style:normal;color:#c92a2a"></em></button><span class="muted" id="totalHint"></span></span></h3>
+        <h3>岗位 <span class="right"><button class="linkbtn" id="btnRetryTop" onclick="retryFailed()" title="把投递失败的岗位（登录失效/风控/按钮没找到）重新排队投递">重投失败<em id="retryFailN" style="font-style:normal;color:#c92a2a"></em></button><span style="color:var(--hairline-strong);margin:0 12px">|</span><span class="muted" id="totalHint"></span></span></h3>
         <div class="applybar" id="applyBar" style="display:none">
           <b id="selCount">已选 0 条</b>
           <button class="btn btn-primary btn-sm" id="btnApply" onclick="applySelected()">投递选中岗位</button>
           <span class="vsep"></span>
           <button class="btn btn-sm" onclick="bulkAct('star','1')" title="给选中的岗位加星">收藏</button>
-          <select id="bulkStage" class="btn btn-sm" style="height:32px;padding:0 8px" onchange="if(this.value){bulkAct('stage',this.value);this.value=''}">
+          <select id="bulkStage" class="btn btn-sm" style="height:var(--ctl-h-sm);padding:0 8px" onchange="if(this.value){bulkAct('stage',this.value);this.value=''}">
             <option value="">批量标阶段…</option>
             <option value="interview">面试中</option><option value="offer">Offer</option>
             <option value="rejected">未通过</option><option value="clear">清除阶段</option></select>
@@ -753,7 +797,7 @@
     </div>
 
     <div id="view-config" style="display:none">
-      <div class="card" id="cfgCard" style="max-width:860px">
+      <div class="card" id="cfgCard" style="max-width:860px;margin:0 auto">
         <h3>获取配置</h3>
         <div class="sect">平台开关（点一次「立即获取」= 按顺序跑所有启用的平台）</div>
         <div class="row3">
@@ -769,7 +813,7 @@
         <label>关键词（英文逗号分隔）</label>
         <input type="text" id="cfgKeywords" placeholder="数据分析,数据分析师,BI工程师">
 
-        <label>城市 <span style="float:right"><button class="linkbtn" onclick="syncCities()">同步 BOSS 城市库</button> <button class="linkbtn" onclick="syncLpCities()">同步猎聘城市码</button></span></label>
+        <label>城市 <span style="float:right"><button class="linkbtn" onclick="syncCities()">同步 BOSS 城市库</button><span style="color:var(--hairline-strong);margin:0 10px">|</span><button class="linkbtn" onclick="syncLpCities()">同步猎聘城市码</button></span></label>
         <div class="picker" id="cityPicker">
           <div class="box" id="cityBox" onclick="focusCity()">
             <div id="cityTags" style="display:flex;gap:8px;flex-wrap:wrap"></div>
@@ -873,12 +917,12 @@
         <span class="sk sk-tag" style="width:110px"></span><span class="sk sk-tag" style="width:64px"></span>
       </div>
       <div class="sk sk-block" style="height:196px;margin-bottom:16px"></div>
-      <div class="sk sk-line w60" style="height:44px;border-radius:8px;margin-bottom:14px"></div>
+      <div class="sk sk-line w60" style="height:44px;border-radius:var(--r-sm);margin-bottom:14px"></div>
       <div style="display:flex;gap:10px">
-        <div class="sk" style="height:52px;flex:1;border-radius:8px"></div>
-        <div class="sk" style="height:52px;flex:1;border-radius:8px"></div>
+        <div class="sk" style="height:52px;flex:1;border-radius:var(--r-sm)"></div>
+        <div class="sk" style="height:52px;flex:1;border-radius:var(--r-sm)"></div>
       </div>
-      <div class="sk" style="height:32px;width:230px;border-radius:8px;margin-top:16px"></div>
+      <div class="sk" style="height:var(--ctl-h-sm);width:230px;border-radius:var(--r-sm);margin-top:16px"></div>
     </div>
     <!-- 失败态：保留上下文（可关闭/可重试），不把用户困在弹窗里 -->
     <div id="jobError" style="display:none">
@@ -1682,7 +1726,7 @@ async function loadReplies(){
       <td class="reply-note" title="${esc(r.reply_note||'')}">${esc((r.reply_note||'').slice(0,42)||'—')}</td>
       <td>${st}</td>
       <td style="white-space:nowrap">
-        <select style="height:32px;width:104px;border:1px solid var(--hairline-strong);font-size:12px" title="标记求职阶段"
+        <select style="height:var(--ctl-h-sm);width:104px;border:1px solid var(--hairline-strong);font-size:12px" title="标记求职阶段"
           onchange="setStageQuick('${esc(r.job_id)}',this.value)">
           <option value="">— 选阶段 —</option>
           <option value="interview" ${r.stage==='interview'?'selected':''}>面试中</option>
