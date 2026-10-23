@@ -317,6 +317,12 @@ def main():
     check("骨架-扫光渐变边缘柔化", "rgba(255,255,255,0) 36%" in _html)
     check("骨架-有加载状态文案", 'id="jobSkStatus"' in _html and 'role="status"' in _html)
     check("骨架-内容层带过渡类", 'id="jobContent" class="sk-swap"' in _html)
+    # ---- 12c. 形状一致性锁：全站一套圆角 token，控件不再直角 ----
+    check("设计-圆角 token 齐全", all(f"--r-{k}:" in _html for k in ("xs", "sm", "md", "lg", "full")))
+    check("设计-表单控件用圆角 token", "border-radius:var(--r-sm);background:var(--canvas)" in _html)
+    check("设计-已无直角控件", "border-radius:0" not in _html.replace("--r-xs:6px", ""))
+    check("设计-下拉自绘箭头", "appearance:none" in _html and "data:image/svg+xml" in _html)
+    check("设计-卡片有阴影层级", "--shadow-card" in _html and "border-radius:var(--r-md);box-shadow" in _html)
     # 投递过即进 HR 回复页（waiting 口径）
     check("回复-接口含waiting字段", "waiting" in client.get("/api/replies?limit=1").json())
 
