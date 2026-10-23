@@ -408,6 +408,52 @@
     .dcard{padding:16px}
     .dkpis{grid-template-columns:1fr 1fr}
   }
+
+  /* ========== 骨架屏扫光（加载反馈：骨架与进度状态） ==========
+     设计约束：
+     - 骨架块尺寸与最终内容一致（同高同宽），替换时不跳动
+     - 扫光只用 transform + opacity（GPU 合成，不触发重排/重绘）
+     - 低对比度渐变，避免"闪白刺眼"
+     - prefers-reduced-motion 下关闭扫光，内容切换也不做过渡 */
+  .sk{
+    display:block;position:relative;overflow:hidden;
+    background:#eef0f2;border-radius:6px;
+  }
+  .sk::after{
+    content:'';position:absolute;inset:0;pointer-events:none;
+    background:linear-gradient(100deg,
+      transparent 20%, rgba(255,255,255,.72) 50%, transparent 80%);
+    transform:translateX(-100%);
+    animation:sk-sweep 1.4s ease-in-out infinite;
+    will-change:transform;
+  }
+  @keyframes sk-sweep{ to{ transform:translateX(100%);} }
+  /* 骨架条（文本行用）：高度=行高，宽度按层级 */
+  .sk-line{height:12px;margin-bottom:8px}
+  .sk-line.w90{width:90%} .sk-line.w75{width:75%} .sk-line.w60{width:60%} .sk-line.w40{width:40%}
+  .sk-title{height:22px;width:52%;border-radius:7px;margin-bottom:12px}
+  .sk-tag{height:24px;width:76px;border-radius:12px;display:inline-block;margin:0 8px 8px 0}
+  .sk-block{height:120px;border-radius:10px}
+  .sk-row{display:flex;gap:12px;align-items:center;padding:10px 0}
+  .sk-row .sk{flex:none}
+  /* 四态容器：loading→success 柔和替换（约 650ms 主过渡）*/
+  .sk-swap{transition:opacity .65s cubic-bezier(.22,1,.36,1), transform .65s cubic-bezier(.22,1,.36,1)}
+  .sk-swap.in{opacity:0;transform:translateY(4px)}
+  .sk-err{
+    display:flex;align-items:center;gap:14px;padding:18px 16px;border-radius:10px;
+    background:#fffafa;border:1px solid #f5d5d5;color:#8a3b3b;font-size:13px;
+  }
+  .sk-err b{color:#c92a2a}
+  .sk-retry{
+    margin-left:auto;height:32px;padding:0 14px;border-radius:8px;cursor:pointer;
+    border:1px solid #e2b6b6;background:#fff;color:#b02a2a;font-size:12.5px;
+  }
+  .sk-retry:hover{background:#fff5f5}
+  .sk-retry:focus-visible{outline:2px solid #c92a2a;outline-offset:2px}
+  @media (prefers-reduced-motion: reduce){
+    .sk::after{animation:none;opacity:0}          /* 关闭扫光 */
+    .sk-swap{transition:none}                      /* 关闭替换动效 */
+  }
 </style>
 </head>
 <body>
@@ -523,7 +569,7 @@
       </div>
 
       <div class="card">
-        <h3>岗位 <span class="right"><button class="linkbtn" id="btnRetryTop" onclick="retryFailed()" title="把投递失败的岗位（登录失效/风控/按钮没找到）重新排队投递">重投失败 <em id="retryFailN" style="font-style:normal;color:#c92a2a"></em></button><span id="totalHint"></span></span></h3>
+        <h3>岗位 <span class="right"><button class="linkbtn" id="btnRetryTop" onclick="retryFailed()" title="把投递失败的岗位（登录失效/风控/按钮没找到）重新排队投递" style="margin-right:16px">重投失败<em id="retryFailN" style="font-style:normal;color:#c92a2a"></em></button><span class="muted" id="totalHint"></span></span></h3>
         <div class="applybar" id="applyBar" style="display:none">
           <b id="selCount">已选 0 条</b>
           <button class="btn btn-primary btn-sm" id="btnApply" onclick="applySelected()">投递选中岗位</button>
@@ -791,6 +837,31 @@
 
 <div class="mask" id="jobMask">
   <div class="modal" style="max-width:820px">
+    <!-- 骨架层：尺寸刻意做成与最终内容一致（标题 22px / 标签 24px / 描述块 / 输入框 / 按钮），切换时不跳动 -->
+    <div id="jobSkeleton">
+      <div class="sk sk-title"></div>
+      <div style="margin-bottom:14px">
+        <span class="sk sk-tag"></span><span class="sk sk-tag"></span>
+        <span class="sk sk-tag" style="width:110px"></span><span class="sk sk-tag" style="width:64px"></span>
+      </div>
+      <div class="sk sk-block" style="height:196px;margin-bottom:16px"></div>
+      <div class="sk sk-line w60" style="height:44px;border-radius:8px;margin-bottom:14px"></div>
+      <div style="display:flex;gap:10px">
+        <div class="sk" style="height:52px;flex:1;border-radius:8px"></div>
+        <div class="sk" style="height:52px;flex:1;border-radius:8px"></div>
+      </div>
+      <div class="sk" style="height:32px;width:230px;border-radius:8px;margin-top:16px"></div>
+    </div>
+    <!-- 失败态：保留上下文（可关闭/可重试），不把用户困在弹窗里 -->
+    <div id="jobError" style="display:none">
+      <div class="sk-err">
+        <span>⚠️ <b>岗位信息读取失败</b><br><span class="muted" id="jobErrMsg" style="font-size:12px"></span></span>
+        <button class="sk-retry" id="jobRetry" onclick="retryOpenJob()">重试</button>
+        <button class="sk-retry" onclick="closeJob()" style="margin-left:8px" title="Esc 也能关闭">关闭</button>
+      </div>
+      <div class="muted" style="margin-top:12px;font-size:12px">也可以关闭后刷新页面再试；列表里的信息不会丢。</div>
+    </div>
+    <div id="jobContent" style="display:none">
     <div class="jobhead">
       <div style="display:flex;gap:16px;align-items:flex-start">
         <div style="flex:1;min-width:0"><b id="jobTitle"></b><div class="jobmeta" id="jobMeta"></div></div>
@@ -836,6 +907,7 @@
       <button class="btn btn-sm" id="jobReplyBtn" onclick="toggleRepliedFromJob()">标记 HR 已回复</button>
       <button class="btn btn-primary btn-sm" id="jobApplyBtn" onclick="applyFromJob()">投递这个岗位</button>
     </div>
+    </div><!-- /#jobContent -->
   </div>
 </div>
 
@@ -1536,10 +1608,10 @@ async function refreshReplyBadge(){
 }
 async function loadReplies(){
   const box=document.getElementById('replyBody');
-  box.innerHTML='<tr><td colspan="8" class="empty">加载中…</td></tr>';
+  box.innerHTML=skRows(8,5);   /* 骨架行：列数与表头一致，加载完柔和替换 */
   let d={};
   try{d=await(await fetch('/api/replies?limit=300')).json()}catch(e){
-    box.innerHTML='<tr><td colspan="8" class="empty">读取失败</td></tr>';return}
+    box.innerHTML='<tr><td colspan="8" class="empty">读取失败，点右上角「刷新」重试</td></tr>';return}
   REPLY_CACHE={};(d.rows||[]).forEach(r=>REPLY_CACHE[r.job_id]=r);
   const s=d.sync||{};
   document.getElementById('replyKpis').innerHTML=`
@@ -1733,6 +1805,9 @@ function _daysSince(ts){
 async function loadJobs(p){
   curPage=Math.max(1,p||1);
   const ps=50;
+  const tb=document.getElementById('jobsBody');
+  // 只有「首屏还没有任何真实行」时才铺骨架；翻页/筛选保留旧内容，避免每次闪烁
+  if(tb && !tb.querySelector('tr[data-jid]')) tb.innerHTML=skRows(12,7);
   const d=await(await fetch(`/api/jobs?page=${curPage}&size=${ps}&`+filterQuery())).json();
   document.getElementById('totalHint').textContent=`共 ${d.total} 条`;
   document.getElementById('jobsBody').innerHTML=d.rows.map(j=>{
@@ -1768,7 +1843,7 @@ async function loadJobs(p){
         :isLp?`<a class="btn btn-sm" href="${esc(j.job_url)}" target="_blank" style="text-decoration:none" title="猎聘岗位请到官网手动投递">去官网</a>`
           :(j.applied===1?'<span class="muted">已投</span>'
           :`<button class="btn btn-sm" onclick="applyOne('${esc(j.job_id)}')">投递</button>`));
-    return `<tr class="${sel.has(j.job_id)?'sel':''}">
+    return `<tr class="${sel.has(j.job_id)?'sel':''}" data-jid="${esc(j.job_id)}">
       <td><input type="checkbox" data-jid="${esc(j.job_id)}" ${sel.has(j.job_id)?'checked':''} ${j.status==='offline'?'disabled':''} onchange="toggleSel(this)"></td>
       <td class="plat">${platIcon(j.source)}</td>
       <td><a class="job-title" onclick="openJob('${esc(j.job_id)}')" title="点击查看详情（备注 / 求职阶段 / 完整描述）">${esc(j.job_name)}</a><a class="ext" href="${esc(j.job_url)}" target="_blank" title="到原网站打开该岗位" onclick="event.stopPropagation()">↗</a> ${dup}<div class="muted">${esc(j.keyword||'')}${j.industry?' / '+esc(j.industry):''}</div></td>
@@ -1817,14 +1892,66 @@ function toggleAll(cb){
 function clearSel(){sel.clear();loadJobs(curPage)}
 
 /* ========== 详情 ========== */
-async function openJob(jid){
-  let j=JOB_CACHE[jid];
-  if(!j){
-    // 单条读取：之前是拉 200 条再本地 find，第 3 页之后的岗位会静默点不开
-    try{const d=await(await fetch('/api/job?job_id='+encodeURIComponent(jid))).json();j=d.job}catch(e){}
+/* ========== 加载反馈：骨架屏四态状态机 ==========
+   idle(未请求) / loading(骨架) / success(内容，650ms 柔和替换) / error(保留上下文+可重试)
+   只用 opacity/transform；prefers-reduced-motion 下由 CSS 关闭扫光与过渡。 */
+/* 表格骨架行：列数按真实表头给，宽度按列位置模拟（首列长、数字列短） */
+function skRows(cols, n){
+  let html='';
+  for(let i=0;i<(n||6);i++){
+    let tds='';
+    for(let c=0;c<cols;c++){
+      const w = c===0 ? '86%' : (c===1 ? '72%' : (c%3===0 ? '46%' : '58%'));
+      tds += `<td><span class="sk sk-line" style="width:${w};margin:0"></span></td>`;
+    }
+    html += `<tr class="sk-tr">${tds}</tr>`;
   }
-  if(!j){toast('岗位信息读取失败，刷新页面后再试');return}
+  return html;
+}
+function setJobState(state, msg){
+  const sk=document.getElementById('jobSkeleton');
+  const ct=document.getElementById('jobContent');
+  const er=document.getElementById('jobError');
+  if(!sk||!ct||!er)return;
+  if(state==='loading'){
+    er.style.display='none';
+    ct.style.display='none'; ct.classList.remove('in');
+    sk.style.display='';
+  }else if(state==='error'){
+    sk.style.display='none';
+    ct.style.display='none';
+    er.style.display='';
+    const m=document.getElementById('jobErrMsg'); if(m)m.textContent=msg||'网络或接口异常';
+    try{document.getElementById('jobRetry').focus()}catch(e){}   /* 键盘可直接回车重试 */
+  }else{ // success：柔和替换（骨架直接撤，内容 650ms 淡入+归位）
+    sk.style.display='none';
+    er.style.display='none';
+    ct.style.display='';
+    ct.classList.add('in');
+    requestAnimationFrame(()=>requestAnimationFrame(()=>{ ct.classList.remove('in'); }));
+  }
+}
+async function openJob(jid){
   curJobId=jid;
+  // 关键：先开弹窗给反馈，再决定「有缓存直接渲染」还是「先骨架后加载」
+  // （旧逻辑是 fetch 完才弹窗，缓存未命中时点了几百毫秒完全没反应）
+  document.getElementById('jobMask').classList.add('show');
+  const cached=JOB_CACHE[jid];
+  if(cached){ renderJob(cached); return }
+  setJobState('loading');
+  try{
+    const r=await fetch('/api/job?job_id='+encodeURIComponent(jid));
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const d=await r.json();
+    if(!d||!d.job)throw new Error('接口返回为空');
+    JOB_CACHE[jid]=d.job;
+    renderJob(d.job);
+  }catch(e){
+    setJobState('error', String((e&&e.message)||e).slice(0,80));
+  }
+}
+function retryOpenJob(){ if(curJobId)openJob(curJobId) }
+function renderJob(j){
   document.getElementById('jobTitle').textContent=j.job_name||'无标题';
   document.getElementById('jobMeta').innerHTML=[
     `${platIcon(j.source,'lg')}<span class="muted">${(j.source||'boss')==='liepin'?'猎聘':'BOSS直聘'}</span>`,
@@ -1854,7 +1981,7 @@ async function openJob(jid){
   document.getElementById('jobStageNote').value=j.stage_note||'';
   document.getElementById('jobNextAt').value=(j.next_at||'').replace(' ','T').slice(0,16);
   document.getElementById('jobNextNote').value=j.next_note||'';
-  document.getElementById('jobMask').classList.add('show');
+  setJobState('success');
   document.getElementById('jobDesc').scrollTop=0;
 }
 async function saveNextAt(){
@@ -2007,8 +2134,10 @@ function pollApply(){
 }
 async function stopApply(){const r=await(await fetch('/api/apply_cancel',{method:'POST'})).json();toast(r.msg)}
 async function loadApps(){
+  const body=document.getElementById('appsBody');
+  if(body && !body.querySelector('td:not(.empty)')) body.innerHTML=skRows(4,3);
   const d=await(await fetch('/api/applications?limit=20')).json();
-  document.getElementById('appsBody').innerHTML=(d.apps||[]).map(a=>`<tr>
+  body.innerHTML=(d.apps||[]).map(a=>`<tr>
     <td class="muted">${esc((a.created_at||'').slice(5,16))}</td>
     <td>${esc(a.job_name)}<div class="muted">${esc(a.company||'')}</div></td>
     <td>${a.status==='success'?'<span class="tag tag-new">成功</span>':'<span class="tag tag-fail">失败</span>'}</td>
