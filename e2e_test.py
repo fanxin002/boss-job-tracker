@@ -1233,6 +1233,19 @@ def main():
     except Exception:
         pass
 
+    # ---- 21. 隐私闸：要推到 GitHub 的文件不能含个人/凭据信息 ----
+    # 背景：2026-10-23 发现 e2e 的简历样本用了真实姓名+真实公司，公开仓库 140 个 commit 全带
+    try:
+        import push_gh as ghmod
+        _hits = ghmod.scan_private()
+        check("隐私-待推文件无个人/凭据信息", _hits == [], str(_hits[:3]))
+        _gi = open(".gitignore", encoding="utf-8").read()
+        check("隐私-闸门函数可用且词表在 data 下（data/ 已被忽略）",
+              hasattr(ghmod, "scan_private") and os.sep + "data" + os.sep in ghmod.TERMS_FILE
+              and "data/" in _gi)
+    except ImportError:
+        check("隐私-推送脚本可导入", False, "push_gh 导入失败")
+
     # ---- 汇总 ----
     passed = sum(1 for s, *_ in RESULTS if s == "PASS")
     failed = [n for s, n, d in RESULTS if s == "FAIL"]
