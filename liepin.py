@@ -274,6 +274,8 @@ def normalize(cards, kw, city_name, dq):
             continue
         seen.add(jid)
         salary_txt = (j.get("salary") or "").strip()
+        # 猎聘原始值是小写 k（如「130-180k」），BOSS 是「13-18K」，列表里两平台并排看会很别扭 → 统一大写
+        salary_txt = re.sub(r"(\d)\s*[kK]\b", r"\1K", salary_txt)
         refresh = str(j.get("refreshTime") or "")
         # 猎聘 dq 形如「厦门-翔安区」或只有「厦门」；剥掉城市前缀，避免列表显示「厦门 厦门-翔安区」
         area = (j.get("dq") or "").strip()
