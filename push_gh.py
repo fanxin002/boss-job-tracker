@@ -6,8 +6,9 @@ TOKEN = os.environ.get("GH_TOKEN", "")
 OWNER, REPO, BRANCH = "fanxin002", "boss-job-tracker", "main"
 API = f"https://api.github.com/repos/{OWNER}/{REPO}/contents"
 ROOT = os.path.dirname(os.path.abspath(__file__))
-FILES = ["static/index.html", "liepin.py", "e2e_test.py", "push_gh.py"]
-MSG = "fix: liepin detail panel opened with BOSS label; normalize liepin salary k->K; e2e no longer corrupts login_state.json"
+FILES = ["app.py", "static/index.html", "e2e_test.py", "README.md",
+         "tunnel.py", "start_tunnel.bat", ".gitignore", "push_gh.py"]
+MSG = "feat: access-key gate + Cloudflare quick tunnel for phone access (localhost bypass, CF header aware)"
 
 # 隐私闸：推送前扫一遍要上传的文件，命中就拒绝推送（仓库是 public）
 # 2026-10-23 踩过的坑：e2e 的简历测试样本用了真实姓名+真实公司，从第一个 commit
