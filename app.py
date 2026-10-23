@@ -1113,7 +1113,7 @@ def api_reply_state():
 
 @app.get("/api/replies")
 def api_replies(limit: int = 200, source: str = ""):
-    """已回复岗位列表（前端「HR 回复」页）。
+    """投递追踪列表（前端「HR 回复」页）：**投递过就显示**，分「等待回复 / 已回复」两态。
 
     自动同步只支持 BOSS（读 BOSS 会话列表里的公司名）；猎聘的回复在猎聘站内 IM，
     需要登录态调私有接口，本工具不接入 —— 猎聘岗位只能用「手动标记 HR 已回复」。
