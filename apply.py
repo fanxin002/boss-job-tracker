@@ -71,16 +71,26 @@ def _already_chatted(tab):
         return False
 
 
+# 「立即沟通」按钮选择器（2026-10-23 实测：BOSS 前端用 a.btn-startchat，
+# 旧的 .btn-start-talk 已不存在；父容器 div.btn-startchat-wrap 也含同样文字，
+# 用 text():立即沟通 会先命中不可点的 div → 所以必须优先用 a 标签的 class 选择器）
+_START_CHAT_SELECTORS = (
+    "x://a[contains(@class,'btn-startchat')]",
+    "x://a[contains(@class,'btn-start-talk')]",
+    "x://button[contains(@class,'btn-start-talk')]",
+    "x://button[contains(@class,'btn-startchat')]",
+    "text():立即沟通",
+)
+
+
 def _click_and_confirm(tab, greeting, logf):
     """点「立即沟通」→ 处理简历弹窗 → 轮询确认发起成功。返回 (ok, msg)"""
-    btn = _find_btn(tab, "x://a[contains(@class,'btn-start-talk')]",
-                    "x://button[contains(@class,'btn-start-talk')]",
-                    "text():立即沟通", "text():沟通")
+    btn = _find_btn(tab, *_START_CHAT_SELECTORS)
     if not btn:
         if _already_chatted(tab):
             return True, "已沟通过（跳过，不重复打招呼）"
         time.sleep(1.5)  # 慢加载重试一次
-        btn = _find_btn(tab, "x://a[contains(@class,'btn-start-talk')]", "text():立即沟通")
+        btn = _find_btn(tab, *_START_CHAT_SELECTORS)
         if not btn:
             # 兜底二次确认：先分清是「未登录/风控」还是「真下架」，别把账号问题
             # 误报成岗位问题（用户 2026-10-23 实际踩过：wt2 过期被报成岗位已下架）
