@@ -495,6 +495,8 @@ def main():
     check("投递-正常页面不误判", _st_ok is None, str(_st_ok))
 
     # ---- 19c. 重投失败：failed_apply_ids + 接口 + 冤下线修复 ----
+    # 自愈：状态文件可能被外部并发写坏（曾踩过），先写一份有效登录态再测
+    json.dump({"logged": True, "at": "t", "note": ""}, open(st_path, "w", encoding="utf-8"))
     db.upsert_jobs([mk("RF1"), mk("RF2")], rid2)
     db.set_applied(["RF1", "RF2"], 2)          # 标为投递失败
     db.set_applied(["A"], 1)                    # A 是成功的，不应被重投
@@ -524,6 +526,15 @@ def main():
         r3 = client.post("/api/apply_retry")
         check("重投-无失败岗位时提示", r3.json()["ok"] is False and "没有投递失败" in r3.json()["msg"],
               r3.json().get("msg", ""))
+        # 未登录时应直接拒绝（曾经的坑：没这道检查 → 起了批但 probe 401 秒退，
+        # 用户看不到投递发生，2026-10-23 实际踩过）
+        db.set_applied(["RF1"], 2)   # 造一条失败，让 ids 非空
+        json.dump({"logged": False, "at": "", "note": ""}, open(st_path, "w", encoding="utf-8"))
+        r4 = client.post("/api/apply_retry")
+        check("重投-未登录直接拒绝", r4.json()["ok"] is False and "未登录" in r4.json()["msg"],
+              r4.json().get("msg", ""))
+        json.dump({"logged": True, "at": "t", "note": ""}, open(st_path, "w", encoding="utf-8"))
+        db.set_applied(["RF1"], 0)
     finally:
         appmod._do_apply = _real_do_apply
 
