@@ -217,8 +217,11 @@ def main():
     # 伪造已登录：state 文件 + Cookie 文件都要（get_login_state 会交叉校验 wt2）
     st_path = appmod.crawler.STATE_FILE
     ck_path = appmod.crawler.COOKIE_FILE
-    old = open(st_path, encoding="utf-8").read() if os.path.exists(st_path) else None
-    old_ck = open(ck_path, encoding="utf-8").read() if os.path.exists(ck_path) else None
+    # 变量名必须独立：`old` 在下面第 12 节会被复用成调参元组，
+    # 之前用 `old` 保存原状态 → 末尾还原时拿到的是元组，写回失败被 except 吞掉，
+    # 结果测试自己的假状态（{"logged": true, "at": "t"}）留在了真实文件里
+    _st_orig = open(st_path, encoding="utf-8").read() if os.path.exists(st_path) else None
+    _ck_orig = open(ck_path, encoding="utf-8").read() if os.path.exists(ck_path) else None
     json.dump({"logged": False, "at": "", "note": ""}, open(st_path, "w", encoding="utf-8"))
     r = client.post("/api/apply", json={"job_ids": ["A"]})
     check("API-投递未登录拒绝", r.json()["ok"] is False and "未登录" in r.json()["msg"], r.json()["msg"])
@@ -281,8 +284,8 @@ def main():
     r = client.post("/api/cancel_login")  # 无关接口仍工作
     r = client.post("/api/apply_cancel")
     check("API-取消投递", r.json()["ok"] is True, r.json()["msg"])
-    if old is not None:
-        open(st_path, "w", encoding="utf-8").write(old)
+    if _st_orig is not None:
+        open(st_path, "w", encoding="utf-8").write(_st_orig)
     # 等投递线程收尾
     for _ in range(40):
         if not client.get("/api/apply_status").json()["running"]:
@@ -957,6 +960,19 @@ def main():
     check("平台-猎聘行入库", nlp == 2 and db.get_job("lp1974831551")["source"] == "liepin")
     check("平台-猎聘薪资解析", db.get_job("lp1974831551")["salary_min"] == 20
           and db.get_job("lp23847163")["salary_min"] is None)
+    # 薪资格式：猎聘原始是小写 k（10-15k），BOSS 是 K，两平台并排看很别扭 → 入库统一大写
+    _resp_low = json.dumps({"flag": 1, "data": {"data": {"jobCardList": [
+        {"job": {"jobId": "9999991", "title": "数据开发", "salary": "10-15k·13薪",
+                 "link": "https://www.liepin.com/job/19999991.shtml", "jobKind": "2"}}],
+        "pagination": {"currentPage": 0, "pageSize": 40, "totalPage": 1}}}})
+    _c_low, _ = lpmod.parse_resp(_resp_low)
+    _r_low = lpmod.normalize(_c_low, "数据分析", "厦门", "090040")
+    check("平台-薪资小写k统一为大写K",
+          bool(_r_low) and _r_low[0]["salary"] == "10-15K·13薪",
+          str(_r_low[0]["salary"] if _r_low else None))
+    # 岗位详情「打开原页」：文案和链接必须跟平台一致（曾写死「在 BOSS 打开」，猎聘岗位看着像跳 BOSS）
+    check("UI-打开原页文案按平台切换", "?'在猎聘打开':'在 BOSS 打开'" in _html
+          and '>在 BOSS 打开</a>' not in _html)
     t_lp, _ = db.query_jobs({"source": "liepin"})
     t_boss, rows_boss = db.query_jobs({"source": "boss"})
     check("平台-source筛选猎聘=2", t_lp == 2, f"n={t_lp}")
@@ -1218,20 +1234,25 @@ def main():
         import shutil as _sh
         _sh.rmtree(_bkdir, ignore_errors=True)
     # 还原被测试伪造的登录态文件（Cookie 是真实凭据，必须原样写回）
+    # 注意：读到的原内容若为空/空白，说明本来就没有有效内容 → 删掉，绝不写回一个 0 字节文件
+    #（2026-10-23 踩过：把空串写回后 login_state.json 变成 0 字节，界面显示「状态文件损坏」）
     try:
-        if old is not None:
-            open(st_path, "w", encoding="utf-8").write(old)
+        if _st_orig and _st_orig.strip():
+            open(st_path, "w", encoding="utf-8").write(_st_orig)
         elif os.path.exists(st_path):
             os.remove(st_path)
     except Exception:
         pass
     try:
-        if old_ck is not None:
-            open(ck_path, "w", encoding="utf-8").write(old_ck)
+        if _ck_orig and _ck_orig.strip():
+            open(ck_path, "w", encoding="utf-8").write(_ck_orig)
         elif os.path.exists(ck_path):
             os.remove(ck_path)
     except Exception:
         pass
+    # 回归：测试跑完绝不能把真实登录态文件写坏（历史上被写成了 0 字节 / 假状态）
+    _note_after = str(appmod.crawler.get_login_state().get("note") or "")
+    check("清理-登录态文件未被测试写坏", "状态文件损坏" not in _note_after, _note_after[:60])
 
     # ---- 21. 隐私闸：要推到 GitHub 的文件不能含个人/凭据信息 ----
     # 背景：2026-10-23 发现 e2e 的简历样本用了真实姓名+真实公司，公开仓库 140 个 commit 全带
