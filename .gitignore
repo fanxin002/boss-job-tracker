@@ -2,6 +2,8 @@
 data/
 *.db
 *.log
+tools/
+tunnel.log
 .browsers.txt
 .pip.log
 .pipcheck.txt
