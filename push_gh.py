@@ -7,7 +7,7 @@ OWNER, REPO, BRANCH = "fanxin002", "boss-job-tracker", "main"
 API = f"https://api.github.com/repos/{OWNER}/{REPO}/contents"
 ROOT = os.path.dirname(os.path.abspath(__file__))
 FILES = ["static/index.html", "e2e_test.py", "push_gh.py"]
-MSG = "polish: softer skeleton shimmer (soft-edge gradient, 1.2s linear) + status line + fix missing sk-swap transition"
+MSG = "design: unify shape system (5 radius tokens), round all controls, custom select arrow, filter group panel"
 
 
 def req(url, data=None, method=None):
