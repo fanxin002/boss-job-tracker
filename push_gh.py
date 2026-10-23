@@ -6,8 +6,8 @@ TOKEN = os.environ.get("GH_TOKEN", "")
 OWNER, REPO, BRANCH = "fanxin002", "boss-job-tracker", "main"
 API = f"https://api.github.com/repos/{OWNER}/{REPO}/contents"
 ROOT = os.path.dirname(os.path.abspath(__file__))
-FILES = ["apply.py", "app.py", "db.py", "static/index.html", "e2e_test.py", "push_gh.py"]
-MSG = "feat: one-click retry for failed applies; stop falsely marking jobs offline on any failure msg"
+FILES = ["crawler.py", "liepin.py", "app.py", "e2e_test.py", "push_gh.py"]
+MSG = "fix: atomic write for login_state.json (non-atomic write left 0-byte file = fake logout); apply_retry login precheck"
 
 
 def req(url, data=None, method=None):
