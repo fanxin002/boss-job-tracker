@@ -644,6 +644,7 @@ def counts(source=""):
         "offline": one(f"SELECT COUNT(*) FROM jobs {base} AND status='offline'"),
         "new": one(f"SELECT COUNT(*) FROM jobs {base} AND is_new=1"),
         "applied": one(f"SELECT COUNT(*) FROM jobs {base} AND applied=1"),
+        "apply_failed": one(f"SELECT COUNT(*) FROM jobs {base} AND applied=2"),
         "salary_missing": one(f"SELECT COUNT(*) FROM jobs {base} "
                               "AND (salary_min IS NULL OR salary_min<=0)"),
         "desc_done": one(f"SELECT COUNT(*) FROM jobs {base} "
@@ -913,6 +914,17 @@ def set_applied(job_ids, applied, clear=False):
         c.commit()
         c.close()
         return cur.rowcount
+
+
+def failed_apply_ids(source="boss", limit=50):
+    """投递失败（applied=2）的岗位 ID，按最近投递时间倒序——供「一键重投」用"""
+    c = conn()
+    src = (source or "boss").strip()
+    rows = c.execute(
+        "SELECT job_id FROM jobs WHERE applied=2 AND source=? "
+        "ORDER BY COALESCE(applied_at,'') DESC LIMIT ?", (src, int(limit))).fetchall()
+    c.close()
+    return [r["job_id"] for r in rows]
 
 
 def set_detail(job_id, text, welfare=None, area=None):
