@@ -95,6 +95,43 @@ python app.py                    # 或 Windows 双击 start.bat
 5. （可选）想合并猎聘岗位：「获取配置」顶部「平台开关」→ 猎聘选「开启」；免登录即可搜索，点顶部「猎聘」胶囊登录一次（独立登录态）可拿更全结果
 
 <details>
+<summary><b>📱 手机在外面也能看（内网穿透）</b></summary>
+
+电脑上跑着服务，用 Cloudflare 快速隧道把它映射到一个公网 https 地址，手机不用装任何 App，Safari 打开就行。
+
+**1. 先设访问口令**（不设的话任何拿到网址的人都能看你的岗位/备注/简历画像）
+
+```bash
+# 生成一个 10 位口令，写进 data/access_key.txt
+python -c "import secrets;print(''.join(secrets.choice('abcdefghjkmnpqrstuvwxyz23456789') for _ in range(10)))" > data/access_key.txt
+```
+
+**2. 起隧道**
+
+```bash
+python tunnel.py          # 或 Windows 双击 start_tunnel.bat
+```
+
+终端会打印形如 `https://xxx-xxx-xxx.trycloudflare.com` 的公网地址（同时复制到剪贴板），第一次需要把 `cloudflared.exe` 放到 `tools/` 下：
+
+```
+https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe
+```
+
+**3. 手机打开**该地址 → 输口令 → 之后 30 天免输；iOS 用「分享 → 添加到主屏幕」可全屏运行。
+
+**门禁规则**（`app.py` 的 `_access_gate` 中间件）：
+
+| 来源 | 行为 |
+|---|---|
+| 本机 `127.0.0.1` 直连 | 免口令，自己电脑上不用输 |
+| 经隧道/局域网来的请求 | 必须带 `jbt` cookie 或 `?k=口令`，否则只给登录页（401） |
+| 没配 `data/access_key.txt` | 门禁整体关闭，行为和以前完全一样 |
+
+注意：快速隧道地址**每次重启都会变**（随机子域名）；网址本身是公网可达的，安全性靠口令这一层，不要发到公开群。想固定域名需要 Cloudflare 账号 + 自有域名做命名隧道。
+</details>
+
+<details>
 <summary><b>⚠️ 免责声明</b>（点开阅读）</summary>
 
 本项目仅供个人求职效率用途，通过只读接口获取公开岗位列表。请自行承担使用第三方平台自动化的账号风险（项目内置防风控节流），不要用于批量爬取、转售数据等违反平台条款的用途。
@@ -113,18 +150,22 @@ boss-job-tracker/
 ├── salary.py           # 薪资文本 → 数值解析
 ├── resume.py           # 简历解析 + 技能词典 + 匹配分计算
 ├── push.py             # PushPlus 微信推送
-├── e2e_test.py         # 248 项端到端回归测试（离线，monkeypatch 模拟浏览器）
+├── e2e_test.py         # 端到端回归测试（离线，monkeypatch 模拟浏览器）
 ├── selftest.py         # 轻量自检
+├── tunnel.py           # Cloudflare 快速隧道（手机外网访问）
 ├── start.bat           # Windows 一键启动
+├── start_tunnel.bat    # Windows 一键起隧道
 ├── requirements.txt
 ├── static/
 │   ├── index.html      # 单文件前端
 │   └── vendor/leaflet/ # Leaflet 1.9.4 + leaflet.heat（本地打包）
+├── tools/              # cloudflared.exe（.gitignore 排除，用时自己下载）
 └── data/               # 运行时生成（.gitignore 排除，绝不上传）
     ├── jobs.db         # 岗位/批次/配置/投递记录
     ├── cities.json     # 城市字典
     ├── chrome_profile/ # 浏览器用户目录（含登录 Cookie）
     ├── boss_cookies.json / login_state.json
+    ├── access_key.txt  # 外网访问口令（不建=不启用门禁）
     └── pushplus.txt    # PushPlus token（自己创建，仓库只给 .example）
 ```
 
