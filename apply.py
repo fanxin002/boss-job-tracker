@@ -15,13 +15,24 @@ import db
 
 
 def _page_state(tab):
-    """返回 None=正常 / 'blocked:原因' / 'offline' 岗位已下架"""
+    """返回 None=正常 / 'blocked:原因' / 'offline' 岗位已下架
+
+    登录失效的识别（实测 2026-10-23）：wt2 在 BOSS 服务端过期后，cookie 文件里的
+    wt2 还在（文件不自己删），注入后打开详情页会跳转到
+    /web/passport/zp/error.html?code=7，正文「当前登录状态已失效」，
+    且页面没有「立即沟通」按钮——不识别就会误报成「岗位已下架」。
+    """
     try:
         url = (tab.url or "")
         if "login" in url or "verify" in url or "security-check" in url:
             return "blocked:登录失效或需要安全验证"
+        # 登录态过期：BOSS 跳 passport 错误页（code=7 就是登录失效）
+        if "passport/zp/error" in url or "error.html" in url:
+            return "blocked:BOSS 登录态已失效（页面跳转错误页 code=7，请重新登录）"
         body = tab.ele("tag:body", timeout=2)
         text = (body.text or "")[:1000] if body else ""
+        if "当前登录状态已失效" in text or "登录状态已失效" in text:
+            return "blocked:BOSS 登录态已失效（页面提示登录状态失效，请重新登录）"
         if any(k in text for k in ("安全验证", "滑块", "请完成验证", "访问异常")):
             return "blocked:触发安全验证"
         if "账户存在异常行为" in text or "环境存在异常" in text:
@@ -71,6 +82,11 @@ def _click_and_confirm(tab, greeting, logf):
         time.sleep(1.5)  # 慢加载重试一次
         btn = _find_btn(tab, "x://a[contains(@class,'btn-start-talk')]", "text():立即沟通")
         if not btn:
+            # 兜底二次确认：先分清是「未登录/风控」还是「真下架」，别把账号问题
+            # 误报成岗位问题（用户 2026-10-23 实际踩过：wt2 过期被报成岗位已下架）
+            st = _page_state(tab)
+            if st and str(st).startswith("blocked"):
+                return False, st
             return False, "未找到「立即沟通」按钮（岗位可能不可聊/已下架）"
     try:
         btn.click(by_js=True)
@@ -171,6 +187,18 @@ def run_apply(job_ids, greeting, logf, batch_id, max_batch=20, interval=(12, 30)
 
     page = crawler.ensure_browser(offscreen=True)  # 离屏有头：真实浏览器指纹，更不容易被判风控
     crawler.inject_cookies(page)
+    # 登录态活性前置探测（关键修复，2026-10-23）：
+    # 「cookie 文件里有 wt2」≠ BOSS 服务端认——会话过期时文件里的 wt2 还在，
+    # 注入后打开详情页会跳 error.html?code=7，曾被误报成「岗位已下架」。
+    # 这里用一次轻量接口探测真实登录态，失效/风控则整批不开始，不留脏失败记录。
+    code, pmsg = crawler.probe_api(page, "数据分析", "101230200")
+    if code in (401, 403, 36, 37, 38):
+        crawler._close_browser()
+        _why = {401: "登录态已失效", 403: "登录态已失效", 36: "触发风控",
+                37: "触发风控", 38: "触发风控"}.get(code, "异常")
+        logf(f"⛔ BOSS {_why}（接口 code={code} {pmsg or ''}），投递未开始。"
+             f"请点顶部「BOSS」胶囊重新扫码登录后再投递")
+        return 0, len(jobs)
     ok_cnt = fail_cnt = 0
     consecutive_fail = 0
     try:
