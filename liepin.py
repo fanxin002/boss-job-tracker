@@ -179,18 +179,32 @@ def cookies_logged(page) -> bool:
 
 
 def set_login_state(ok, note=""):
+    """原子写（同 crawler.set_login_state：避免进程被杀时留下空文件误显示未登录）"""
     import json as _json
+    import tempfile
     from datetime import datetime
-    _json.dump({"logged": bool(ok), "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "note": note}, open(STATE_FILE, "w", encoding="utf-8"))
+    payload = {"logged": bool(ok), "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "note": note}
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(STATE_FILE), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            _json.dump(payload, f, ensure_ascii=False)
+        os.replace(tmp, STATE_FILE)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except Exception:
+            pass
+        raise
 
 
 def get_login_state():
     import json as _json
     try:
         st = _json.load(open(STATE_FILE, encoding="utf-8"))
+        if not isinstance(st, dict):
+            raise ValueError("not a dict")
     except Exception:
-        st = {"logged": False, "at": "", "note": ""}
+        st = {"logged": False, "at": "", "note": "状态文件损坏，点「猎聘」胶囊重新登录", "stale": True}
     th = _login.get("thread")
     st["login_open"] = bool(_login["running"] and th and th.is_alive())
     return st
