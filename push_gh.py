@@ -6,8 +6,8 @@ TOKEN = os.environ.get("GH_TOKEN", "")
 OWNER, REPO, BRANCH = "fanxin002", "boss-job-tracker", "main"
 API = f"https://api.github.com/repos/{OWNER}/{REPO}/contents"
 ROOT = os.path.dirname(os.path.abspath(__file__))
-FILES = ["crawler.py", "liepin.py", "app.py", "e2e_test.py", "push_gh.py"]
-MSG = "fix: atomic write for login_state.json (non-atomic write left 0-byte file = fake logout); apply_retry login precheck"
+FILES = ["apply.py", "e2e_test.py", "push_gh.py"]
+MSG = "fix: BOSS renamed apply button class to btn-startchat - old btn-start-talk selector never matched"
 
 
 def req(url, data=None, method=None):
