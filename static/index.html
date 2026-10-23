@@ -574,7 +574,7 @@
           <table class="jobs replies">
             <thead><tr>
               <th>公司</th><th>岗位</th><th>薪资</th><th>匹配</th>
-              <th>回复时间</th><th>最后一句 / 备注</th><th>状态</th><th>操作</th>
+              <th title="已回复显示回复时间；等待回复显示投递时间">时间</th><th>最后一句 / 备注</th><th>状态</th><th>操作</th>
             </tr></thead>
             <tbody id="replyBody"></tbody>
           </table>
@@ -1529,7 +1529,9 @@ async function refreshReplyBadge(){
   try{
     const d=await(await fetch('/api/replies?limit=1')).json();
     const b=document.getElementById('navReplyBadge');
-    if(d.total>0){b.style.display='';b.textContent=d.total}else{b.style.display='none'}
+    // 徽标显示「已回复」条数（不是投递总数——投递量会很大，徽标就没意义了）
+    const n=d.replied||0;
+    if(n>0){b.style.display='';b.textContent=n}else{b.style.display='none'}
   }catch(e){}
 }
 async function loadReplies(){
@@ -1541,33 +1543,42 @@ async function loadReplies(){
   REPLY_CACHE={};(d.rows||[]).forEach(r=>REPLY_CACHE[r.job_id]=r);
   const s=d.sync||{};
   document.getElementById('replyKpis').innerHTML=`
-    <div class="dk"><div class="lb">已回复</div><b>${d.total||0}</b><div class="dt">收到 HR 消息的岗位</div></div>
-    <div class="dk"><div class="lb">已投递</div><b>${d.applied||0}</b><div class="dt">其中走过投递流程</div></div>
-    <div class="dk"><div class="lb">仍在招</div><b>${d.active||0}</b><div class="dt">岗位未下线</div></div>
-    <div class="dk"><div class="lb">上次同步</div><b style="font-size:22px">${s.running?'同步中…':esc(s.at||'未同步')}</b>
+    <div class="dk"><div class="lb">已投递</div><b>${d.total||0}</b><div class="dt">投过就显示，不用等回复</div></div>
+    <div class="dk"><div class="lb">等待回复</div><b style="color:#b45309">${d.waiting||0}</b><div class="dt">已投递、HR 还没回</div></div>
+    <div class="dk"><div class="lb">已回复</div><b style="color:#2b8a3e">${d.replied||0}</b><div class="dt">收到 HR 消息</div></div>
+    <div class="dk"><div class="lb">上次同步</div><b style="font-size:22px">${s.running?'同步中…':esc((s.at||'未同步').slice(5,16))}</b>
       <div class="dt" title="${esc(s.last||'')}">${s.running?'正在读取 BOSS 会话':esc((s.last||'点右上角「同步 BOSS 会话」').slice(0,30))}</div></div>`;
   const lpRows=(d.rows||[]).filter(r=>r.source==='liepin').length;
   document.getElementById('replyHint').innerHTML=
-    '<b>自动同步只支持 BOSS</b>：靠「BOSS 会话列表里出现该公司名」判断，公司名对不上会漏判，漏了可在岗位详情手动「标记 HR 已回复」；同步只读取，不会给 HR 发任何消息。<br>'
-    +'<b>猎聘没有自动同步</b>：猎聘聊天记录在猎聘站内 IM，需要登录态调它的私有接口，本工具不接入 —— 猎聘岗位请用岗位详情的「标记 HR 已回复」手动维护'
-    +(lpRows?`（当前有 ${lpRows} 条猎聘岗位是手动标记的）`:'')+'。';
+    '<b>投递过就会出现在这里</b>：未回复的标「等待回复」（右侧时间是你的投递时间，方便看投了多久没动静），HR 回复后自动变「已回复」。<br>'
+    +'<b>自动同步只支持 BOSS</b>：靠「BOSS 会话列表里出现该公司名」判断，公司名对不上会漏判，漏了可点「标记已回复」手动补；同步只读取，不会给 HR 发任何消息。'
+    +'<b>猎聘没有自动同步</b>：聊天记录在猎聘站内 IM，需登录态调私有接口，本工具不接入 —— 猎聘岗位请手动标记'
+    +(lpRows?`（当前有 ${lpRows} 条猎聘岗位在列表中）`:'')+'。';
   if(!(d.rows||[]).length){
-    box.innerHTML='<tr><td colspan="8" class="empty">还没有 HR 回复记录。点右上角「同步 BOSS 会话」读取一次。</td></tr>';
+    box.innerHTML='<tr><td colspan="8" class="empty">还没有投递记录。投过一条岗位后就会出现在这里，标记为「等待回复」，HR 回复后再变成「已回复」。</td></tr>';
     return;
   }
   box.innerHTML=d.rows.map(r=>{
-    const st=r.status==='offline'?'<span class="tag tag-off">已下线</span>'
-      :(r.applied===1?'<span class="tag tag-applied">已投递</span>':'<span class="tag">未投递</span>');
+    const replied=r.replied===1;
+    // 状态列：投递即显示。已回复 > 等待回复 > 岗位下线（未回复且下线）
+    const st = replied
+      ? '<span class="tag tag-new">已回复</span>'
+      : (r.status==='offline'
+          ? '<span class="tag tag-off">等待回复·已下线</span>'
+          : '<span class="tag" style="background:#fffaf0;border-color:#f0c36d;color:#b45309">等待回复</span>');
     const score=r.match_score||0;
     const cls=score>=60?'tag-sal':(score>=40?'':'');
     const isLp=r.source==='liepin';
     const platTag=platIcon(r.source,'lg');
+    // 时间列：已回复显示回复时间，未回复显示投递时间（让「投了多久没动静」一眼可见）
+    const tRaw = replied ? (r.reply_at||'') : (r.applied_at||firstSeenOf(r));
+    const tLabel = replied ? '回复' : '投递';
     return `<tr>
       <td>${platTag}<b>${esc(r.company||'')}</b><div class="muted">${esc(locText(r.city_name,r.area_district))}</div></td>
       <td><a href="${esc(r.job_url||'#')}" target="_blank">${esc(r.job_name||'')}</a></td>
       <td>${r.salary?`<span class="tag tag-sal">${esc(r.salary)}</span>`:'<span class="muted">未知</span>'}</td>
       <td><span class="tag ${cls}" title="基于简历画像">${score}</span></td>
-      <td class="muted">${esc((r.reply_at||'').slice(5,16)||'—')}</td>
+      <td class="muted" title="${esc(tLabel)}时间">${esc((tRaw||'').slice(5,16)||'—')}</td>
       <td class="reply-note" title="${esc(r.reply_note||'')}">${esc((r.reply_note||'').slice(0,42)||'—')}</td>
       <td>${st}</td>
       <td style="white-space:nowrap">
@@ -1582,9 +1593,13 @@ async function loadReplies(){
         ${isLp
           ?`<a class="btn btn-sm" href="${esc(r.job_url||'https://www.liepin.com/zhaopin/')}" target="_blank" style="text-decoration:none" title="猎聘不支持消息同步，去官网沟通">去猎聘</a>`
           :'<a class="btn btn-sm" href="https://www.zhipin.com/web/geek/chat" target="_blank" style="text-decoration:none">去聊天</a>'}
-        <button class="btn btn-sm" onclick="setReplied('${esc(r.job_id)}',false)">取消标记</button>
+        ${replied
+          ? `<button class="btn btn-sm" onclick="setReplied('${esc(r.job_id)}',false)" title="取消「已回复」标记">撤销已回复</button>`
+          : `<button class="btn btn-sm" onclick="setReplied('${esc(r.job_id)}',true)" title="HR 已在站内回复过了，手动标记">标记已回复</button>`}
       </td></tr>`}).join('');
 }
+/* 兜底：没有 applied_at 的老数据用 first_seen */
+function firstSeenOf(r){ return (r.first_seen||'').replace('T',' '); }
 async function setStageQuick(jid, val){
   const stage = (val==='clear') ? '' : val;
   try{
@@ -1986,7 +2001,8 @@ function pollApply(){
     document.getElementById('btnApply').disabled=s.running;
     if(s.running){applyRunning=true;setRunState('投递中','run')}
     else{applyRunning=false;clearInterval(applyTimer);document.getElementById('btnApply').disabled=false;
-      setRunState('空闲','ok');loadJobs(curPage);loadApps();getLoginState();refreshRetryBadge()}
+      setRunState('空闲','ok');loadJobs(curPage);loadApps();getLoginState();refreshRetryBadge();
+      refreshReplyBadge();if(curView==='replies')loadReplies()}
   },3000);
 }
 async function stopApply(){const r=await(await fetch('/api/apply_cancel',{method:'POST'})).json();toast(r.msg)}
