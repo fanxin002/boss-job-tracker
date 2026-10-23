@@ -3,14 +3,16 @@
 import csv
 import io
 import json
+import secrets
 import threading
 import time
 import uuid
 from datetime import datetime
+from urllib.parse import parse_qs, urlencode
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -43,6 +45,92 @@ _apply_cancel = {"flag": False}
 _detail_state = {"running": False, "log": [], "done": 0, "total": 0}
 _detail_cancel = {"flag": False}
 scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
+
+
+# ---------- 外网访问口令（内网穿透时启用；本机使用零影响） ----------
+# 规则：
+#   1) 没配 data/access_key.txt → 完全不启用，行为和以前一样
+#   2) 本机直连（127.0.0.1 且没有 Cloudflare 转发头）→ 免口令，自己电脑上不用输
+#   3) 其余（经隧道/局域网来的）→ 必须带 cookie 或 ?k=口令，否则只给登录页
+# 为什么不能用「来源是 127.0.0.1 就放行」：cloudflared 是在本机把请求转发进来的，
+# 隧道来的请求来源同样是 127.0.0.1，只能靠 CF-Connecting-IP / CF-Ray 区分。
+_ACCESS_FILE = _os.path.join(db.DATA_DIR, "access_key.txt")
+
+
+def _access_key():
+    try:
+        with open(_ACCESS_FILE, encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def _login_html(msg=""):
+    tip = f'<p class="err">{msg}</p>' if msg else ""
+    return f"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>访问口令 · 岗位追踪</title>
+<style>
+  *{{box-sizing:border-box}}
+  body{{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+    background:#f7f7f8;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;color:#262626}}
+  form{{background:#fff;border:1px solid #e6e6e6;border-radius:12px;padding:28px 26px;width:min(92vw,340px);
+    box-shadow:0 8px 30px rgba(0,0,0,.06)}}
+  h1{{margin:0 0 4px;font-size:18px}}
+  p{{margin:0 0 16px;font-size:13px;color:#6b6b6b}}
+  .err{{color:#c92a2a}}
+  input{{width:100%;height:42px;padding:0 12px;border:1px solid #ccc;border-radius:8px;font-size:16px;margin-bottom:12px}}
+  input:focus{{outline:none;border-color:#1c69d4;box-shadow:0 0 0 3px rgba(28,105,212,.15)}}
+  button{{width:100%;height:42px;border:0;border-radius:8px;background:#1c69d4;color:#fff;font-size:15px;font-weight:600}}
+  button:active{{background:#0653b6}}
+</style></head><body>
+<form method="post" action="/__login">
+  <h1>岗位追踪</h1>
+  <p>这是私人看板，请输入访问口令</p>
+  {tip}
+  <input name="k" type="password" inputmode="text" autocomplete="current-password" autofocus placeholder="访问口令">
+  <button type="submit">进入</button>
+</form></body></html>"""
+
+
+@app.middleware("http")
+async def _access_gate(request: Request, call_next):
+    key = _access_key()
+    if not key:
+        return await call_next(request)
+    host = (request.client.host if request.client else "") or ""
+    via_proxy = bool(request.headers.get("cf-connecting-ip") or request.headers.get("cf-ray")
+                     or request.headers.get("x-forwarded-for"))
+    # testclient 是 Starlette TestClient 的虚拟来源，走不到网络上，放行让 e2e 能测真实逻辑
+    if host in ("127.0.0.1", "::1", "localhost", "testclient") and not via_proxy:
+        return await call_next(request)          # 本机直连：免口令
+    path = request.url.path
+    if path == "/__login":
+        if request.method == "POST":
+            # 手动解析 x-www-form-urlencoded：用 request.form() 会强依赖 python-multipart，
+            # 为了一个登录框多装一个包不值得
+            raw = (await request.body()).decode("utf-8", "ignore")
+            given = (parse_qs(raw).get("k") or [""])[0].strip()
+            if given and secrets.compare_digest(given, key):
+                resp = RedirectResponse("/", status_code=303)
+                resp.set_cookie("jbt", key, max_age=30 * 24 * 3600,
+                                httponly=True, samesite="lax")
+                return resp
+            return HTMLResponse(_login_html("口令不对，再试一次"), status_code=401)
+        return HTMLResponse(_login_html())
+    cookie_ok = secrets.compare_digest(str(request.cookies.get("jbt") or ""), key)
+    if cookie_ok:
+        return await call_next(request)
+    q = str(request.query_params.get("k") or "").strip()
+    if q and secrets.compare_digest(q, key):
+        # 用 ?k= 首次进来：种 cookie 后跳到去掉口令的干净地址（避免口令留在浏览器历史里）
+        rest = [(k2, v) for k2, v in request.query_params.multi_items() if k2 != "k"]
+        target = path + ("?" + urlencode(rest) if rest else "")
+        resp = RedirectResponse(target, status_code=303)
+        resp.set_cookie("jbt", key, max_age=30 * 24 * 3600, httponly=True, samesite="lax")
+        return resp
+    return HTMLResponse(_login_html(), status_code=401)
+
 
 
 # ---------- 获取执行 ----------
