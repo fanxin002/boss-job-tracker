@@ -301,6 +301,21 @@ def main():
     r = client.get("/api/applications?limit=5")
     check("API-投递记录接口", r.status_code == 200 and isinstance(r.json()["apps"], list))
 
+    # ---- 12b. 骨架屏加载反馈（静态结构 + 动效降级约束）----
+    _html_path = os.path.join(BASE, "static", "index.html")
+    _html = open(_html_path, encoding="utf-8").read()
+    check("骨架-四态容器齐全", all(k in _html for k in
+          ('id="jobSkeleton"', 'id="jobContent"', 'id="jobError"', 'id="jobRetry"')))
+    check("骨架-状态机函数存在", "function setJobState(" in _html and "function skRows(" in _html)
+    # 扫光必须用 transform（GPU 合成），不能用 background-position（会触发重绘）
+    _sk_css = _html[_html.find(".sk::after"):_html.find(".sk::after") + 420]
+    check("骨架-扫光用transform", "transform" in _sk_css and "background-position" not in _sk_css)
+    check("骨架-尊重减动效", "@media (prefers-reduced-motion: reduce)" in _html
+          and "animation:none" in _html)
+    check("骨架-过渡时长650ms", ".65s" in _html)
+    # 投递过即进 HR 回复页（waiting 口径）
+    check("回复-接口含waiting字段", "waiting" in client.get("/api/replies?limit=1").json())
+
     # ---- 13. 并发互斥：抓取运行中拒绝投递（反之同理） ----
     appmod._state["running"] = True
     r = client.post("/api/apply", json={"job_ids": ["B"]})
