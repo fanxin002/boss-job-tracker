@@ -747,28 +747,37 @@ def get_staged(limit=500):
 
 
 def get_replied(limit=200, source=""):
-    """已回复岗位列表（按回复时间倒序，前端「HR 回复」页用）
+    """投递追踪列表（前端「HR 回复」页用）：**投递过就显示**，不等 HR 回复。
 
+    2026-10-23 用户要求：「投递完就在 HR 回复这里显示状态，不用已回复再显示」。
+    所以范围是 applied=1 OR replied=1，并用 replied 字段区分：
+      replied=1 → HR 已回复；replied=0 → 已投递等回复。
+    排序：未回复的排前面（需要跟进），同组内按投递/回复时间倒序。
     回复状态只有 BOSS 能自动同步；猎聘行只能靠手动标记，所以带上 source 让前端区分。
     """
     src = (source or "").strip()
     cond = " AND source=?" if src else ""
     params = ((src,) if src else ())
+    where = " WHERE (applied=1 OR replied=1)" + cond
     c = conn()
     rows = c.execute(
         "SELECT job_id, job_name, company, salary, salary_min, salary_max, city_name, area_district, "
         "COALESCE(source,'boss') source, "
         "job_url, status, applied, applied_at, replied, reply_note, reply_at, note, starred, "
-        "match_score, first_seen, stage, stage_at, stage_note FROM jobs WHERE replied=1" + cond +
-        " ORDER BY COALESCE(reply_at,'') DESC, COALESCE(match_score,0) DESC LIMIT ?",
+        "match_score, first_seen, stage, stage_at, stage_note FROM jobs" + where +
+        " ORDER BY COALESCE(replied,0) ASC, "
+        "COALESCE(NULLIF(applied_at,''), NULLIF(reply_at,''), first_seen) DESC LIMIT ?",
         params + (limit,)).fetchall()
     stats = c.execute(
         "SELECT COUNT(*) total, "
         "SUM(CASE WHEN applied=1 THEN 1 ELSE 0 END) applied, "
+        "SUM(CASE WHEN replied=1 THEN 1 ELSE 0 END) replied, "
+        "SUM(CASE WHEN applied=1 AND COALESCE(replied,0)=0 THEN 1 ELSE 0 END) waiting, "
         "SUM(CASE WHEN status='active' THEN 1 ELSE 0 END) active "
-        "FROM jobs WHERE replied=1" + cond, params).fetchone()
+        "FROM jobs" + where, params).fetchone()
     c.close()
     return {"total": stats["total"] or 0, "applied": stats["applied"] or 0,
+            "replied": stats["replied"] or 0, "waiting": stats["waiting"] or 0,
             "active": stats["active"] or 0, "rows": [dict(r) for r in rows]}
 
 
