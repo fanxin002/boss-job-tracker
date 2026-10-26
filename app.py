@@ -1390,9 +1390,20 @@ def api_export(keyword: str = "", city_code: str = "", is_new: int = 0, status: 
 @app.get("/", response_class=HTMLResponse)
 def index():
     import os
+    from datetime import datetime as _dt
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "index.html")
     with open(path, encoding="utf-8") as f:
-        return f.read()
+        html = f.read()
+    # 页面版本戳：前端右上角显示，用来一眼判断「浏览器是不是还在用旧页面」。
+    # 用户 2026-10-26 反馈「猎聘岗位也显示在 BOSS 打开」，代码其实早已按平台切换，
+    # 根因是他那个标签页从昨天一直开着没刷新 —— 有版本戳就能当场看出来。
+    try:
+        stamp = _dt.fromtimestamp(os.path.getmtime(path)).strftime("%m-%d %H:%M")
+    except OSError:
+        stamp = "-"
+    html = html.replace("__BUILD__", stamp)
+    # 禁止缓存：访问口令过期后若还能拿到缓存的页面壳，用户会看到「0 个岗位 / 未登录」的假象
+    return HTMLResponse(html, headers={"Cache-Control": "no-store, must-revalidate"})
 
 
 @app.get("/api/map")
