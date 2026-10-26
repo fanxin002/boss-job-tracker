@@ -6,10 +6,10 @@ TOKEN = os.environ.get("GH_TOKEN", "")
 OWNER, REPO, BRANCH = "fanxin002", "boss-job-tracker", "main"
 API = f"https://api.github.com/repos/{OWNER}/{REPO}/contents"
 ROOT = os.path.dirname(os.path.abspath(__file__))
-FILES = ["app.py", "liepin.py", "static/index.html", "e2e_test.py", "README.md",
+FILES = ["app.py", "crawler.py", "liepin.py", "static/index.html", "e2e_test.py", "README.md",
          "tunnel.py", "tunnel.bat", ".gitignore", "push_gh.py"]
-MSG = ("feat: one-command tunnel (auto-download cloudflared) + platform label by URL domain "
-       "+ honest liepin login state (lt_auth cross-check) + page build stamp")
+MSG = ("fix: stop clobbering fresher wt2 on inject (root cause of 'must re-login every time'); "
+       "refresh cookie file after each crawl; tunnel: named-tunnel support + push URL to WeChat")
 
 # 隐私闸：推送前扫一遍要上传的文件，命中就拒绝推送（仓库是 public）
 # 2026-10-23 踩过的坑：e2e 的简历测试样本用了真实姓名+真实公司，从第一个 commit
