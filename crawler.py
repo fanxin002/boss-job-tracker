@@ -327,41 +327,58 @@ def cookies_have_login():
 
 
 def inject_cookies(page):
-    """先落地域名再写 Cookie，写完重新导航一次：
-    让 BOSS 自己的 JS 在带 Cookie 的会话里重新生成 __zp_stoken__ 等风控令牌，
-    否则沿用旧令牌容易被判定 code=36/37。
+    """恢复登录态，三级阶梯（**不再用文件值粗暴覆盖 profile**）。
 
-    注入策略（防「登录老掉」的关键一环）：
-      - 登录凭据 wt2/bsti 用**文件里的值**（登录成功时 save_cookies 一定写了最新鲜的）
-      - 其余 cookie **只补浏览器当前没有的**，不覆盖浏览器已有的
-    这样浏览器 profile 里刚登录的有效会话不会被文件里的旧值冲掉；
-    反过来文件里有登录态而 profile 没有时，也能正常补上。
+    为什么会「每次都要重新登录」（2026-10-26 排查结论）：
+      旧逻辑无条件把文件里的 wt2 写进浏览器。文件里的 wt2 往往是上一次登录的旧值，
+      而浏览器 profile 里可能已经被 BOSS 的 JS 刷新成新的 —— 一注入就把新鲜的冲掉，
+      于是下次请求被判未登录，用户体感就是「怎么又要登」。
+      再加上 wt2 本身会过期（实测约 20 小时），旧值每次都被重新写回，等于永远修不好。
+
+    现在的阶梯：
+      1) profile 里已有登录凭据 → **一律不动**，只用文件补它没有的 cookie
+      2) profile 里没有 → 用文件里的注入
+      3) 注完还是没登录 → 说明文件里那份也过期了，如实返回 False（不装成功）
+    返回 True 表示浏览器当前拿到了登录凭据。
     """
     import json as _json
     if not os.path.exists(COOKIE_FILE):
-        return False
+        return cookies_logged(page)
     try:
         saved = _json.load(open(COOKIE_FILE, encoding="utf-8")) or []
     except Exception:
-        return False
+        return cookies_logged(page)
+
+    def _names(pg):
+        out = set()
+        try:
+            for c in _cookie_list(pg):
+                nm = c.get("name") if isinstance(c, dict) else getattr(c, "name", None)
+                if nm:
+                    out.add(str(nm))
+        except Exception:
+            pass
+        return out
+
     try:
         page.get("https://www.zhipin.com/web/geek/jobs")
         time.sleep(1.2)
-        have = set()
-        for c in _cookie_list(page):
-            nm = c.get("name") if isinstance(c, dict) else getattr(c, "name", None)
-            if nm:
-                have.add(str(nm))
+        have = _names(page)
+        # 只在「profile 缺登录凭据」时才注入登录 cookie；其余 cookie 只补缺
+        lack_login = not any(n in have for n in LOGIN_COOKIES)
         to_set = []
         for c in saved:
             nm = str(c.get("name") if isinstance(c, dict) else getattr(c, "name", "") or "")
-            if nm in LOGIN_COOKIES or nm not in have:
-                to_set.append(c)      # 登录凭据：文件权威；其他：只补缺
+            if nm in LOGIN_COOKIES:
+                if lack_login:
+                    to_set.append(c)
+            elif nm not in have:
+                to_set.append(c)
         if to_set:
             page.set.cookies(to_set)
-        page.get("https://www.zhipin.com/web/geek/jobs")  # 带 Cookie 重新加载，刷新令牌
-        time.sleep(1.2)
-        return True
+            page.get("https://www.zhipin.com/web/geek/jobs")  # 带 Cookie 重新加载，刷新令牌
+            time.sleep(1.2)
+        return cookies_logged(page)
     except Exception:
         return False
 
@@ -1023,9 +1040,12 @@ def run_crawl(run_id, keywords, cities, pages, want_detail, headless=False, offs
 def _crawl_body(run_id, keywords, cities, pages, want_detail, headless, offscreen, logf,
                 covered, all_rows, run_ids, degree="", progress=None):
     page = ensure_browser(headless, offscreen)
-    inject_cookies(page)
+    logged_now = inject_cookies(page)
     mode_txt = "无头静默" if headless else ("离屏有头" if offscreen else "有头")
     logf(f"浏览器就绪（{mode_txt}模式，窗口不会打扰你）")
+    if not logged_now:
+        logf("⚠️ 登录凭据已失效（wt2 过期或缺失）：本轮很可能只拿到游客结果。"
+             "点顶部「BOSS」胶囊重新登录一次即可恢复（登录后会自动回写新的 Cookie）")
 
     # 进度：总任务 = 关键词 × 城市 × 页数（前端进度条用）
     tot = max(1, len(keywords) * len(cities) * max(1, int(pages or 1)))
@@ -1117,6 +1137,15 @@ def _crawl_body(run_id, keywords, cities, pages, want_detail, headless, offscree
             time.sleep(random.uniform(6, 14))
 
     _flush(force=True)
+
+    # 抓完顺手把浏览器里最新鲜的 cookie 写回文件：
+    # wt2 会被 BOSS 的 JS 在会话中刷新，只有回写一次，文件里的备份才不会越放越旧
+    # （否则下次注入的永远是上一次登录时的那份，看着像「每次都要重新登录」）
+    try:
+        if cookies_logged(page):
+            save_cookies(page)
+    except Exception:
+        pass
 
     if not all_rows:
         logf("❌ 本轮未抓到任何数据" + (f"：{stopped}" if stopped else "（登录态失效或被风控）"))
