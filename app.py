@@ -3,6 +3,8 @@
 import csv
 import io
 import json
+import os
+import re
 import secrets
 import threading
 import time
@@ -1398,23 +1400,39 @@ def api_export(keyword: str = "", city_code: str = "", is_new: int = 0, status: 
 
 
 # ---------- 前端 ----------
-@app.get("/", response_class=HTMLResponse)
-def index():
-    import os
+# ---------- 前端（两份：电脑版 index.html / 手机版 m.html） ----------
+_STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+_MOBILE_UA = re.compile(r"Mobile|Android|iPhone|iPod|Windows Phone|HarmonyOS|MiuiBrowser|MicroMessenger", re.I)
+
+
+def _serve_html(name):
+    """读静态页 + 注入版本戳，并禁止缓存（口令过期后拿到缓存壳会显示「0 条/未登录」的假象）"""
     from datetime import datetime as _dt
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "index.html")
+    path = os.path.join(_STATIC, name)
     with open(path, encoding="utf-8") as f:
         html = f.read()
-    # 页面版本戳：前端右上角显示，用来一眼判断「浏览器是不是还在用旧页面」。
-    # 用户 2026-10-26 反馈「猎聘岗位也显示在 BOSS 打开」，代码其实早已按平台切换，
-    # 根因是他那个标签页从昨天一直开着没刷新 —— 有版本戳就能当场看出来。
+    # 版本戳：前端角落显示，用来一眼判断「浏览器是不是还在用旧页面」
     try:
         stamp = _dt.fromtimestamp(os.path.getmtime(path)).strftime("%m-%d %H:%M")
     except OSError:
         stamp = "-"
     html = html.replace("__BUILD__", stamp)
-    # 禁止缓存：访问口令过期后若还能拿到缓存的页面壳，用户会看到「0 个岗位 / 未登录」的假象
     return HTMLResponse(html, headers={"Cache-Control": "no-store, must-revalidate"})
+
+
+@app.get("/", response_class=HTMLResponse)
+def index(request: Request, desktop: int = 0):
+    """手机 UA 自动进手机版；`/?desktop=1` 可强制电脑版（手机版页脚也有「切到电脑版」）"""
+    ua = request.headers.get("user-agent", "") or ""
+    if not desktop and _MOBILE_UA.search(ua):
+        return RedirectResponse("/m", status_code=302)
+    return _serve_html("index.html")
+
+
+@app.get("/m", response_class=HTMLResponse)
+def mobile_page():
+    """手机版：卡片列表 + 底部导航 + 下拉刷新，专为小屏写的独立页面（不是桌面版缩窄）"""
+    return _serve_html("m.html")
 
 
 @app.get("/api/map")
