@@ -25,6 +25,7 @@ import db
 SOURCE = "liepin"
 PROFILE_DIR = os.path.join(db.DATA_DIR, "chrome_profile_liepin")
 STATE_FILE = os.path.join(db.DATA_DIR, "liepin_login_state.json")
+COOKIE_FILE = os.path.join(db.DATA_DIR, "liepin_cookies.json")
 LOGIN_URL = "https://www.liepin.com/user/login/"
 HOME_URL = "https://www.liepin.com/"
 
@@ -178,6 +179,60 @@ def cookies_logged(page) -> bool:
         return False
 
 
+def save_cookies(page):
+    """登录成功后把 cookie 落盘（合并写，同 BOSS 的教训：别用游客态覆盖掉登录凭据）。
+
+    为什么需要这份文件：光靠状态文件说「已登录」是假象 —— 猎聘会话过期后状态文件不会自己变，
+    界面就一直显示已登录，点岗位却被跳到登录/中转页（2026-10-26 实测：profile 里 16 个 cookie
+    但没有 lt_auth，状态文件却说「手动登录」）。有 cookie 文件才能像 BOSS 那样交叉校验。
+    """
+    import json as _json
+    import tempfile
+    try:
+        new = crawler._cookie_list(page)
+    except Exception:
+        return False
+    old = []
+    try:
+        with open(COOKIE_FILE, encoding="utf-8") as f:
+            old = _json.load(f) or []
+    except Exception:
+        old = []
+
+    def _key(c):
+        name = c.get("name") if isinstance(c, dict) else getattr(c, "name", None)
+        dom = c.get("domain") if isinstance(c, dict) else ""
+        return (str(name), str(dom))
+
+    merged = {_key(c): c for c in old}
+    for c in new:
+        merged[_key(c)] = c
+    # 登录凭据保护：新列表没有 lt_auth 时保留旧的（游客态保存不能擦掉登录态）
+    if not any(_key(c)[0] == "lt_auth" for c in new):
+        keep = [c for c in old if _key(c)[0] == "lt_auth"]
+        for c in keep:
+            merged.setdefault(_key(c), c)
+    try:
+        fd, tmp = tempfile.mkstemp(dir=db.DATA_DIR, suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            _json.dump(list(merged.values()), f, ensure_ascii=False)
+        os.replace(tmp, COOKIE_FILE)
+        return True
+    except Exception:
+        return False
+
+
+def cookies_have_login() -> bool:
+    """从落盘文件判断登录凭据是否存在（不启浏览器，接口调用成本为零）"""
+    import json as _json
+    try:
+        with open(COOKIE_FILE, encoding="utf-8") as f:
+            data = _json.load(f) or []
+        return any((c.get("name") if isinstance(c, dict) else None) == "lt_auth" for c in data)
+    except Exception:
+        return False
+
+
 def set_login_state(ok, note=""):
     """原子写（同 crawler.set_login_state：避免进程被杀时留下空文件误显示未登录）"""
     import json as _json
@@ -205,6 +260,12 @@ def get_login_state():
             raise ValueError("not a dict")
     except Exception:
         st = {"logged": False, "at": "", "note": "状态文件损坏，点「猎聘」胶囊重新登录", "stale": True}
+    # 交叉校验（同 BOSS 的 wt2 教训）：状态文件说已登录，但落盘 cookie 里没有 lt_auth
+    # → 猎聘会话早就过期了，如实报未登录，别让界面继续显示「已登录」骗人。
+    if st.get("logged") and os.path.exists(COOKIE_FILE) and not cookies_have_login():
+        st["logged"] = False
+        st["stale"] = True
+        st["note"] = "状态文件记录已登录，但 cookie 里没有 lt_auth（会话已过期），请重新登录猎聘"
     th = _login.get("thread")
     st["login_open"] = bool(_login["running"] and th and th.is_alive())
     return st
@@ -241,6 +302,8 @@ def login_flow():
             except Exception:
                 pass
         set_login_state(ok, "手动登录" if ok else "未完成登录")
+        if ok:
+            save_cookies(page)      # 落盘才有得校验，否则状态文件永远是「一言堂」
     except Exception as e:
         set_login_state(False, f"登录窗口异常：{e}")
     finally:
@@ -478,6 +541,7 @@ def run_details(jobs, logf, interval=(3, 6), should_cancel=None, on_progress=Non
     """批量补抓猎聘详情（JD + 福利 + 区县）。返回 (ok, fail)。"""
     import random
     ok = fail = 0
+    blocked = 0                   # 被猎聘 302 到登录/中转页的次数
     if not jobs:
         return 0, 0
     page = _ensure_liepin_browser(headless=True, offscreen=True)
@@ -494,6 +558,19 @@ def run_details(jobs, logf, interval=(3, 6), should_cancel=None, on_progress=Non
             try:
                 page.get(url)
                 time.sleep(random.uniform(2.0, 3.2))
+                # 猎聘对未登录/被风控的请求，会 302 到 wow.liepin.com 的中转页（实测 2026-10-26，
+                # 换 UA / 带 Referer / 先访问首页取 cookie 都一样）。这种情况一定是拿不到 JD 的，
+                # 直接如实报「被拦截」并计数，别每一条都白跑还报成「页面结构变化」。
+                final_url = page.url or ""
+                if "wow.liepin.com" in final_url or "transit" in final_url:
+                    blocked += 1
+                    fail += 1
+                    logf(f"  [{i}/{total}] ⛔ 被猎聘拦截：详情页跳到中转页（未登录猎聘时必现）")
+                    if blocked >= 3 and ok == 0:
+                        logf("⛔ 连续 3 条都被跳转 —— 猎聘登录态已失效。"
+                             "先点顶部「猎聘」胶囊重新登录，再回来补抓描述；本轮已停止，避免白跑几百次")
+                        break
+                    continue
                 data = parse_detail(page.run_js(DETAIL_JS) or "")
                 if data.get("jd"):
                     area = data.get("area") or ""
