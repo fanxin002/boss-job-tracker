@@ -1342,6 +1342,9 @@ def main():
     if _akey:
         r = client.get("/api/counts", headers=_PROXY)
         check("口令-隧道无口令被拦", r.status_code == 401 and "访问口令" in r.text, str(r.status_code))
+        # ngrok 转发**不带** CF 头，只能靠 Host 头识别（2026-10-26 实测漏洞：曾把隧道流量当本机放行）
+        r = client.get("/api/counts", headers={"host": "ocean-rental-throwing.ngrok-free.dev"})
+        check("口令-ngrok隧道（无CF头，靠Host识别）也被拦", r.status_code == 401, str(r.status_code))
         check("口令-本机直连免口令", client.get("/api/counts").status_code == 200)
         r = client.post("/__login", data={"k": "wrong-key"}, headers=_PROXY)
         check("口令-错口令被拒", r.status_code == 401, str(r.status_code))
