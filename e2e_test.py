@@ -265,6 +265,39 @@ def main():
     check("登录掉线-游客态保存不擦除wt2", _merged.get("wt2") == "KEEPME"
           and appmod.crawler.cookies_have_login() is True, str(_merged))
     check("登录掉线-同名cookie用新值覆盖", _merged.get("__zp_stoken__") == "new", str(_merged))
+
+    # ---- 注入策略：不能拿文件里的旧 wt2 覆盖浏览器里更新的 wt2 ----
+    # 2026-10-26 用户反馈「每次都要登录」：旧逻辑无条件注入文件里的 wt2，
+    # 而 BOSS 的 JS 会在会话中刷新 wt2 → 一注入就把新鲜的冲掉，永远停在旧值。
+    class _JarPage:
+        def __init__(self, jar):
+            self.jar = list(jar)
+            self.set = type("S", (), {"cookies": lambda _s, cs: (
+                self.jar.__setitem__(slice(None), self.jar + list(cs)))})()
+        def get(self, *_a, **_k):
+            return None
+        def cookies(self):
+            return list(self.jar)
+
+    # A) 浏览器已有 wt2=FRESH，文件里是 OLD → 必须保留 FRESH
+    json.dump([{"name": "wt2", "value": "OLD", "domain": ".zhipin.com"}],
+              open(ck_path, "w", encoding="utf-8"))
+    _pg = _JarPage([{"name": "wt2", "value": "FRESH", "domain": ".zhipin.com"}])
+    _ok_inj = appmod.crawler.inject_cookies(_pg)
+    _vals = {c["name"]: c["value"] for c in _pg.jar}
+    check("注入-不覆盖浏览器里更新的wt2", _vals.get("wt2") == "FRESH" and _ok_inj is True, str(_vals))
+    # B) 浏览器没有 wt2（profile 被清），文件里有 → 补上
+    json.dump([{"name": "wt2", "value": "SAVED", "domain": ".zhipin.com"},
+               {"name": "__zp_stoken__", "value": "s", "domain": ".zhipin.com"}],
+              open(ck_path, "w", encoding="utf-8"))
+    _pg2 = _JarPage([])
+    _ok2 = appmod.crawler.inject_cookies(_pg2)
+    _vals2 = {c["name"]: c["value"] for c in _pg2.jar}
+    check("注入-浏览器缺wt2时从文件补", _vals2.get("wt2") == "SAVED" and _ok2 is True, str(_vals2))
+    # C) 两边都没有 → 必须如实返回 False（不装成功）
+    json.dump([{"name": "ab_guid", "value": "g", "domain": ".zhipin.com"}],
+              open(ck_path, "w", encoding="utf-8"))
+    check("注入-没登录凭据时返回False", appmod.crawler.inject_cookies(_JarPage([])) is False)
     # 重新登录（新列表带同名 wt2）→ 正常覆盖为新值
     class _FakePage2:
         def cookies(self):
