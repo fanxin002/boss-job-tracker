@@ -180,32 +180,48 @@ def run_ngrok(key):
     exe = ensure_binary("ng")
     if not exe:
         return 1
+
+    # 已经有一个 ngrok 在跑（比如用户自己在窗口里开的）→ 直接复用，不再起第二个
+    # （第二个会抢 127.0.0.1:4040 本地 API 端口，然后无声退出 —— 2026-10-26 踩过）
+    alive = _ngrok_public_url(wait=0)
+    if alive:
+        _write(URL_FILE, alive)
+        banner(alive, key, True, "ngrok 隧道（复用已在运行的实例）")
+        print("📲 已推送到微信" if notify_phone(alive, key) else "（未配 PushPlus，跳过微信推送）")
+        print("ℹ️  提示：这个地址是账号固定的，关掉窗口重跑也不会变。")
+        return 0
+
     subprocess.run([exe, "config", "add-authtoken", token], capture_output=True, timeout=60)
 
     domain = _read(NG_DOMAIN_FILE)
-    cmd = [exe, "http", "8765", "--log", "stdout"]
+    cmd = [exe, "http", "8765", "--log", "stdout", "--log-format", "json"]
     if domain:
         cmd += ["--domain", domain]
+    log_path = os.path.join(DATA, "ngrok.log")
+    os.makedirs(DATA, exist_ok=True)
     print("🚇 正在连接 ngrok…（地址固定，首次约 5-10 秒）")
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                            text=True, encoding="utf-8", errors="ignore", bufsize=1)
+    # 日志直接进文件：不再依赖解析 stdout（行内容不稳、也便于失败后排查）
+    with open(log_path, "w", encoding="utf-8") as lf:
+        proc = subprocess.Popen(cmd, stdout=lf, stderr=subprocess.STDOUT)
     _write(PID_FILE, str(proc.pid))
 
-    url, shown = "", False
+    url = ""
+    deadline = time.time() + 30
     try:
-        for line in proc.stdout:
-            if not shown:
-                # 优先问 ngrok 本地 API，比解析日志可靠
-                url = _ngrok_public_url() or url
-                if url:
-                    _write(URL_FILE, url)
-                    banner(url, key, True, "ngrok 隧道")
-                    print("📲 已推送到微信" if notify_phone(url, key) else "（未配 PushPlus，跳过微信推送）")
-                    shown = True
-            if proc.poll() is not None:
-                if not shown:
-                    print("❌ ngrok 启动失败（token 无效/额度用尽/端口占用？）")
+        while time.time() < deadline:
+            url = _ngrok_public_url(wait=0)
+            if url or proc.poll() is not None:
                 break
+            time.sleep(1)
+        if url:
+            _write(URL_FILE, url)
+            banner(url, key, True, "ngrok 隧道")
+            print("📲 已推送到微信" if notify_phone(url, key) else "（未配 PushPlus，跳过微信推送）")
+            while proc.poll() is None:      # 常驻，直到 Ctrl+C / 进程自己退出
+                time.sleep(2)
+        else:
+            print("❌ ngrok 没起来。日志尾部：")
+            print(_tail(log_path))
     except KeyboardInterrupt:
         print("\n⏹ 正在关闭隧道…")
     finally:
@@ -213,8 +229,18 @@ def run_ngrok(key):
     return 0
 
 
-def _ngrok_public_url():
-    for _ in range(10):
+def _tail(path, n=1200):
+    try:
+        with open(path, encoding="utf-8", errors="ignore") as f:
+            return f.read()[-n:]
+    except OSError:
+        return "(无日志)"
+
+
+def _ngrok_public_url(wait=0):
+    """读 ngrok 本地 API 拿公网地址；wait 秒内轮询"""
+    deadline = time.time() + max(0, wait)
+    while True:
         try:
             with urllib.request.urlopen("http://127.0.0.1:4040/api/tunnels", timeout=2) as r:
                 data = json.loads(r.read().decode("utf-8", "ignore"))
@@ -224,8 +250,9 @@ def _ngrok_public_url():
                     return u
         except Exception:
             pass
+        if time.time() >= deadline:
+            return ""
         time.sleep(1)
-    return ""
 
 
 # ---------------- Cloudflare ----------------
