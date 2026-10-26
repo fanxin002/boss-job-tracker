@@ -440,6 +440,58 @@ def api_get_config():
     return cfg
 
 
+class BrowserIn(BaseModel):
+    name: str = "auto"
+
+
+def _browser_busy():
+    return any(s.get("running") for s in
+               (_state, _liepin_state, _unified_state, _detail_state, _apply_state))
+
+
+@app.get("/api/browser")
+def api_browser_get():
+    """抓取用的浏览器：本机装了哪些、当前用哪个、偏好是什么"""
+    avail = crawler.available_browsers()
+    pref = crawler.get_browser_pref()
+    name, exe = crawler.pick_browser()
+    env = (os.environ.get(crawler.PREF_ENV) or "").strip().lower()
+    return {
+        "pref": pref,
+        "env_locked": env if env in ("chrome", "edge") else "",
+        "current": {
+            "name": name or "",
+            "label": crawler.BROWSER_LABELS.get(name, ""),
+            "exe": exe or "",
+            "version": next((b["version"] for b in avail if b["name"] == name), ""),
+        },
+        "available": avail,
+    }
+
+
+@app.post("/api/browser")
+def api_browser_set(body: BrowserIn):
+    """切换抓取用浏览器（auto 时 Chrome 优先、没装才用 Edge）。
+    切换会关掉现有实例，下次获取即用新浏览器；profile 按浏览器分家，
+    新浏览器里要重新扫一次码，Cookie 文件会自动注入能救回一部分登录态。"""
+    try:
+        pref = crawler.set_browser_pref(body.name)
+    except ValueError as e:
+        return {"ok": False, "msg": str(e)}
+    avail = {b["name"] for b in crawler.available_browsers()}
+    if pref != "auto" and pref not in avail:
+        return {"ok": False, "msg": f"本机没装 {crawler.BROWSER_LABELS.get(pref, pref)}，无法切换"}
+    name, _ = crawler.pick_browser()
+    label = crawler.BROWSER_LABELS.get(name, name or "无")
+    if _browser_busy():
+        return {"ok": True, "msg": f"已保存为 {label}；当前有任务在跑，本轮结束后生效"}
+    try:
+        crawler.close_all()
+    except Exception:
+        pass
+    return {"ok": True, "msg": f"已切到 {label}" + ("（自动选择 Chrome 优先）" if pref == "auto" else "")}
+
+
 def _next_run_str():
     j = scheduler.get_job("daily_crawl")
     if not j:
