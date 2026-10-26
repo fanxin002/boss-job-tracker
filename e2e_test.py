@@ -1048,6 +1048,21 @@ def main():
                      follow_redirects=False)
     check("手机版-桌面UA仍进电脑版", _pc.status_code == 200 and 'id="nav-jobs"' in _pc.text,
           str(_pc.status_code))
+    # 设计令牌必须与电脑版**完全一致**（2026-10-26 用户反馈「手机版割裂感很强」：
+    # 当时手机版自己另起了一套背景/圆角/红色薪资，观感和电脑版像两个产品）
+    import re as _re
+
+    def _tokens(txt):
+        m = _re.search(r":root\{(.*?)\}", txt, _re.S)
+        return dict(_re.findall(r"(--[\w-]+)\s*:\s*([^;]+);", m.group(1))) if m else {}
+
+    _ti, _tm = _tokens(_html), _tokens(_mhtml)
+    _keys = ["--primary", "--ink", "--body", "--muted", "--muted-soft", "--hairline",
+             "--hairline-strong", "--canvas", "--surface-soft", "--surface-strong",
+             "--r-xs", "--r-sm", "--r-md", "--r-lg", "--r-full", "--shadow-card"]
+    _diff = {k: (_ti.get(k, "").strip(), _tm.get(k, "").strip()) for k in _keys
+             if _ti.get(k, "").strip() != _tm.get(k, "").strip()}
+    check("手机版-设计令牌与电脑版逐项一致", not _diff, str(_diff))
     t_lp, _ = db.query_jobs({"source": "liepin"})
     t_boss, rows_boss = db.query_jobs({"source": "boss"})
     check("平台-source筛选猎聘=2", t_lp == 2, f"n={t_lp}")
