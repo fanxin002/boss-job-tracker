@@ -552,6 +552,10 @@
         </span>
       </div>
       <span class="nav-status"><span class="dot" id="dotRun"></span><span id="runStatus">空闲</span></span>
+      <span class="pchip" id="chipBrowser" onclick="showBrowserPick()"
+            title="抓取用的浏览器。Chrome 和 Edge 都是 Chromium 内核，效果一样；点这里可以切换">
+        <b id="browserLabel">浏览器</b><span id="browserState">…</span>
+      </span>
       <span class="nav-status" id="buildStamp" style="opacity:.55"
             title="页面构建时间。若这里的时间比你刚改的时间还旧，说明浏览器加载的是缓存页，请按 Ctrl+F5 强制刷新">v__BUILD__</span>
       <button class="btn btn-sm" id="btnCancelLogin" style="display:none" onclick="cancelRepair()">取消</button>
@@ -1103,6 +1107,53 @@ function uiDialog(opt){
     mask.classList.add('show');
     const f=mask.querySelector('[name]');if(f)f.focus();
   });
+}
+
+/* ========== 抓取浏览器（Chrome / Edge 通用） ========== */
+let BROWSER_INFO=null;
+async function loadBrowser(){
+  BROWSER_INFO=await(await fetch('/api/browser')).json();
+  renderBrowserChip();
+}
+function renderBrowserChip(){
+  const c=(BROWSER_INFO&&BROWSER_INFO.current)||{};
+  const lab=document.getElementById('browserLabel'),st=document.getElementById('browserState');
+  if(!lab||!st)return;
+  if(!c.name){lab.textContent='无浏览器';st.textContent='';return}
+  lab.textContent=c.label;
+  st.textContent='v'+String(c.version||'').split('.')[0];
+}
+async function showBrowserPick(){
+  if(!BROWSER_INFO){await loadBrowser().catch(()=>{})}
+  const info=BROWSER_INFO||{};
+  const avail=info.available||[];
+  if(!avail.length){
+    await uiDialog({title:'没有可用浏览器',okText:'知道了',hideCancel:true,
+      html:'<p>本机既没装 Chrome 也没装 <b>Edge</b>。随便装一个就行，代码会自动选用，不用改配置。</p>'});
+    return;
+  }
+  const pref=info.pref||'auto';
+  const opt=(v,t,sel)=>`<option value="${v}"${sel?' selected':''}>${esc(t)}</option>`;
+  const c=info.current||{};
+  const d=await uiDialog({title:'抓取用哪个浏览器',okText:'切换',
+    html:`<div class="note">两个都是 Chromium 内核，抓取效果完全一样。选「自动」= Chrome 优先，本机没装 Chrome 时自动用 Edge。</div>
+      <label>浏览器</label>
+      <select name="browser">
+        ${opt('auto','自动（Chrome 优先，没有就用 Edge）',pref==='auto')}
+        ${avail.map(b=>opt(b.name,b.label+' · v'+b.version,pref===b.name)).join('')}
+      </select>
+      <div class="muted" style="margin-top:10px;line-height:1.7">
+        当前在用 <b>${esc(c.label||'无')}</b>${c.version?` v${esc(String(c.version))}`:''}<br>
+        程序：<code>${esc(c.exe||'')}</code><br>
+        登录态按浏览器分开存：换浏览器后需要重新扫一次码；Cookie 会自动迁移，多数情况不用重登。
+      </div>
+      ${info.env_locked?`<div class="note warn">环境变量 JOB_BROWSER 已锁定为 ${esc(info.env_locked)}，此处的切换只写配置，实际仍按环境变量走。</div>`:''}`});
+  if(!d.ok)return;
+  const want=(d.values&&d.values.browser)||'auto';
+  const r=await(await fetch('/api/browser',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({name:want})})).json();
+  toast(r.msg||(r.ok?'已切换':'切换失败'));
+  await loadBrowser().catch(()=>{});
 }
 
 /* ========== 视图 ========== */
@@ -2698,6 +2749,7 @@ function bindMapSeg(){
   await safe(()=>loadApps());
   await safe(()=>getLoginState());
   await safe(()=>getLpLoginState());
+  await safe(()=>loadBrowser());
   await safe(()=>refreshRisk());
   setInterval(refreshRisk,15000);
   document.getElementById('logClose').onclick=closeLog;
