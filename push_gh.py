@@ -6,10 +6,9 @@ TOKEN = os.environ.get("GH_TOKEN", "")
 OWNER, REPO, BRANCH = "fanxin002", "boss-job-tracker", "main"
 API = f"https://api.github.com/repos/{OWNER}/{REPO}/contents"
 ROOT = os.path.dirname(os.path.abspath(__file__))
-FILES = ["app.py", "crawler.py", "liepin.py", "static/index.html", "e2e_test.py", "README.md",
-         "tunnel.py", "tunnel.bat", ".gitignore", "push_gh.py"]
-MSG = ("fix: stop clobbering fresher wt2 on inject (root cause of 'must re-login every time'); "
-       "refresh cookie file after each crawl; tunnel: named-tunnel support + push URL to WeChat")
+FILES = ["static/index.html", "README.md", "tunnel.py", "tunnel.bat", "push_gh.py"]
+MSG = ("feat: fixed public URL via ngrok free dev domain (one token, then never changes); "
+       "pause all polling when tab hidden (save ngrok free quota); tighten privacy-gate regex")
 
 # 隐私闸：推送前扫一遍要上传的文件，命中就拒绝推送（仓库是 public）
 # 2026-10-23 踩过的坑：e2e 的简历测试样本用了真实姓名+真实公司，从第一个 commit
@@ -20,7 +19,9 @@ GENERIC_PATTERNS = [
     ("手机号", r"(?<!\d)1[3-9]\d{9}(?!\d)"),
     ("邮箱", r"[\w.+-]+@(?:qq|163|126|gmail|outlook)\.com"),
     ("GitHub token", r"gh[pousr]_[A-Za-z0-9]{20,}"),
-    ("Cloud token", r"(?i)(?:token|secret|password|passwd)\s*=\s*[\"'][^\"']{12,}[\"']"),
+    # 只认「像凭据的字面量」：值必须是 12 位以上的 token 字符，且不含引号/换行/括号，
+    # 否则容易把代码里的 token="): 这类表达式当凭据（2026-10-26 误报过一次）
+    ("Cloud token", r"(?i)(?:token|secret|password|passwd)\s*=\s*[\"'][A-Za-z0-9_\-\.]{12,}[\"']"),
 ]
 
 
