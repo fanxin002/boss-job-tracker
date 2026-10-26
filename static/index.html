@@ -1062,6 +1062,18 @@ document.addEventListener('visibilitychange',function(){
   if(document.hidden)return;
   try{getLoginState()}catch(e){}
 });
+/* 后台不轮询：页面切走/锁屏后，所有 ≥1s 的定时器直接跳过，切回来立刻恢复。
+   两个原因：① 手机上省电省流量；② 走 ngrok 免费额度（2 万请求/月）时，
+   一个常驻标签页每分钟几十次轮询，几天就把额度刷爆。 */
+(function(){
+  const _si=window.setInterval;
+  window.setInterval=function(fn,ms){
+    if(typeof fn==='function'&&typeof ms==='number'&&ms>=1000){
+      return _si(function(){ if(document.hidden)return; return fn.apply(this,arguments); },ms);
+    }
+    return _si.apply(window,arguments);
+  };
+})();
 /* ========== 基础 ========== */
 const FALLBACK_CITIES=[["北京","101010100"],["上海","101020100"],["广州","101280100"],["深圳","101280600"],
   ["杭州","101210100"],["成都","101270100"],["厦门","101230200"],["福州","101230100"],["泉州","101230500"]];
