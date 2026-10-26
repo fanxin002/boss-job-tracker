@@ -6,9 +6,10 @@ TOKEN = os.environ.get("GH_TOKEN", "")
 OWNER, REPO, BRANCH = "fanxin002", "boss-job-tracker", "main"
 API = f"https://api.github.com/repos/{OWNER}/{REPO}/contents"
 ROOT = os.path.dirname(os.path.abspath(__file__))
-FILES = ["static/index.html", "README.md", "tunnel.py", "tunnel.bat", "push_gh.py"]
-MSG = ("feat: fixed public URL via ngrok free dev domain (one token, then never changes); "
-       "pause all polling when tab hidden (save ngrok free quota); tighten privacy-gate regex")
+FILES = ["app.py", "tunnel.py", "e2e_test.py", "README.md", "push_gh.py"]
+MSG = ("fix(security): access gate now also checks Host header - ngrok forwards without "
+       "CF-Connecting-IP and tunnel traffic was treated as localhost (no password); "
+       "tunnel.py adopts an already-running ngrok instead of dying on port 4040")
 
 # 隐私闸：推送前扫一遍要上传的文件，命中就拒绝推送（仓库是 public）
 # 2026-10-23 踩过的坑：e2e 的简历测试样本用了真实姓名+真实公司，从第一个 commit
