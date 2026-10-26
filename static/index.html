@@ -552,6 +552,8 @@
         </span>
       </div>
       <span class="nav-status"><span class="dot" id="dotRun"></span><span id="runStatus">空闲</span></span>
+      <span class="nav-status" id="buildStamp" style="opacity:.55"
+            title="页面构建时间。若这里的时间比你刚改的时间还旧，说明浏览器加载的是缓存页，请按 Ctrl+F5 强制刷新">v__BUILD__</span>
       <button class="btn btn-sm" id="btnCancelLogin" style="display:none" onclick="cancelRepair()">取消</button>
       <button class="btn btn-sm" onclick="exportCsv()">导出 CSV</button>
       <button class="btn btn-sm" id="btnReply" onclick="syncReplies()" title="只同步 BOSS 会话；猎聘不支持自动同步（用岗位详情里的手动标记）">同步回复 BOSS</button>
@@ -1040,6 +1042,26 @@
 </div>
 
 <script>
+/* ========== 访问口令：任何接口 401 都直接去登录页 ==========
+   穿透访问时口令过期/没带 cookie，接口会全 401；不处理的话页面停在
+   「0 个岗位 · 未登录」的空壳上，看着像数据丢了（2026-10-23 手机实测踩到） */
+(function(){
+  const raw=window.fetch.bind(window);
+  window.fetch=async function(...a){
+    const r=await raw(...a);
+    if(r.status===401&&location.pathname!=='/__login')location.href='/__login';
+    return r;
+  };
+})();
+/* 登录态补刷：不挂在 boot 里（boot 中间任何一步抛错就轮不到它）——页面 load 后独立补一次；
+   手机从别的 App 切回来也补一次，回来看到的数据才是新的 */
+window.addEventListener('load',function(){
+  setTimeout(function(){try{getLoginState()}catch(e){}},1200);
+});
+document.addEventListener('visibilitychange',function(){
+  if(document.hidden)return;
+  try{getLoginState()}catch(e){}
+});
 /* ========== 基础 ========== */
 const FALLBACK_CITIES=[["北京","101010100"],["上海","101020100"],["广州","101280100"],["深圳","101280600"],
   ["杭州","101210100"],["成都","101270100"],["厦门","101230200"],["福州","101230100"],["泉州","101230500"]];
@@ -1454,11 +1476,14 @@ function closeLog(){clearInterval(logTimer);logTimer=null;document.getElementByI
 /* ========== 登录 / 风控 ========== */
 let loginTimer=null,repairTimer=null;
 const PLAT_NAME={boss:'BOSS',liepin:'猎聘'};
+// 登录态缓存：详情弹窗要据此提示「猎聘未登录，点开会跳登录页」，不用每次现拉接口
+let LP_LOGGED=false, BOSS_LOGGED=false;
 function paintLoginChip(p,st){
   const chip=document.getElementById(p==='boss'?'chipBoss':'chipLp');
   const dot=document.getElementById(p==='boss'?'dotLogin':'dotLp');
   const lb=document.getElementById(p==='boss'?'loginState':'loginLpState');
   if(!chip||!dot||!lb)return;
+  if(p==='liepin')LP_LOGGED=!!st.logged; else BOSS_LOGGED=!!st.logged;
   const busy=!!st.login_open;
   lb.textContent=busy?'登录中…':(st.logged?'已登录':'未登录');
   dot.className='dot '+(busy?'run':(st.logged?'ok':''));
@@ -1913,7 +1938,8 @@ async function loadJobs(p){
       : '<span class="muted">无</span>';
     const dup=j.dup_count>1?`<span class="tag" title="同公司同岗位有多条">同岗 ${j.dup_count}</span>`:'';
     const score=j.match_score||0;
-    const isLp=(j.source||'boss')==='liepin';
+    // 平台判定同详情弹窗：域名优先，source 兜底（防止字段缺失时把猎聘行画成 BOSS）
+    const isLp=(j.source==='liepin')||/liepin\.com/i.test(String(j.job_url||''));
     const act=`<button class="star ${j.starred?'on':''}" title="${j.starred?'取消收藏':'收藏'}"
         onclick="toggleStar('${esc(j.job_id)}',${j.starred?0:1})">★</button>`+
       (j.status==='offline'?'<span class="muted">已下线</span>'
@@ -1922,7 +1948,7 @@ async function loadJobs(p){
           :`<button class="btn btn-sm" onclick="applyOne('${esc(j.job_id)}')">投递</button>`));
     return `<tr class="${sel.has(j.job_id)?'sel':''}" data-jid="${esc(j.job_id)}">
       <td><input type="checkbox" data-jid="${esc(j.job_id)}" ${sel.has(j.job_id)?'checked':''} ${j.status==='offline'?'disabled':''} onchange="toggleSel(this)"></td>
-      <td class="plat">${platIcon(j.source)}</td>
+      <td class="plat">${platIcon(isLp?'liepin':'boss')}</td>
       <td><a class="job-title" onclick="openJob('${esc(j.job_id)}')" title="点击查看详情（备注 / 求职阶段 / 完整描述）">${esc(j.job_name)}</a><a class="ext" href="${esc(j.job_url)}" target="_blank" title="到原网站打开该岗位" onclick="event.stopPropagation()">↗</a> ${dup}<div class="muted">${esc(j.keyword||'')}${j.industry?' / '+esc(j.industry):''}</div></td>
       <td>${j.salary?`<span class="tag tag-sal">${esc(j.salary)}</span>`:'<span class="muted">未知</span>'}</td>
       <td><span class="score ${score>=70?'hi':''}" title="本地规则打分：技能命中 / 薪资 / 学历">${score}</span></td>
@@ -2031,13 +2057,20 @@ async function openJob(jid){
 }
 function retryOpenJob(){ if(curJobId)openJob(curJobId) }
 function renderJob(j){
+  // 平台判定放在最前面：后面的标签、文案、按钮全都要用。
+  // 以**链接域名**为准，source 只作兜底 —— 只信 source 的话，一旦字段丢失/被同岗合并覆盖，
+  // 文案就退回「在 BOSS 打开」（2026-10-26 用户踩过）；域名是硬证据，骗不了人。
+  const _url=String(j.job_url||'');
+  const _isLp=(j.source==='liepin')||/liepin\.com/i.test(_url);
   document.getElementById('jobTitle').textContent=j.job_name||'无标题';
   document.getElementById('jobMeta').innerHTML=[
-    `${platIcon(j.source,'lg')}<span class="muted">${(j.source||'boss')==='liepin'?'猎聘':'BOSS直聘'}</span>`,
+    `${platIcon(_isLp?'liepin':'boss','lg')}<span class="muted">${_isLp?'猎聘':'BOSS直聘'}</span>`,
     j.salary?`<span class="tag tag-sal">${esc(j.salary)}</span>`:'<span class="muted">薪资未知</span>',
     esc(j.company||''),
     (j.company||'').startsWith('某')
       ?'<span class="tag tag-off" title="猎聘对猎头代招职位做了脱敏，真实雇主名平台不公开">保密雇主</span>':'',
+    (_isLp&&!LP_LOGGED)
+      ?'<span class="tag tag-off" title="猎聘登录态已失效：打开岗位页会被跳到登录/中转页，JD 也抓不到。点顶部「猎聘」胶囊重新登录一次就好">猎聘未登录</span>':'',
     esc(locText(j.city_name,j.area_district)),
     j.lng?`<a class="maplink" onclick="openMap('${esc(j.job_id)}')">📍 公司位置</a>`:'',
     esc(j.experience||''),esc(j.degree||''),esc(j.scale||''),
@@ -2046,16 +2079,18 @@ function renderJob(j){
     (j.proxy_job===1?'<span class="tag tag-off">代招</span>':'')+(j.gold_hunter===1?'<span class="tag tag-off">猎头</span>':''),
     j.status==='offline'?'<span class="tag tag-off">已下线</span>':''
   ].filter(Boolean).join(' <span style="color:var(--hairline-strong)">|</span> ');
-  document.getElementById('jobDesc').textContent=j.detail_text||'暂无职位描述，可用「补抓描述」补全';
+  document.getElementById('jobDesc').textContent=j.detail_text||(_isLp
+    ?'猎聘详情页要登录猎聘才读得到（未登录时平台会跳登录页），所以猎聘 JD 常为空。点下方「在猎聘打开」自己看，或用「补抓描述」在猎聘登录后再试。'
+    :'暂无职位描述，可用「补抓描述」补全');
   document.getElementById('jobNote').value=j.note||'';
-  const _isLp=(j.source||'boss')==='liepin';
-  // 打开原页：文案/链接必须跟平台一致（曾经写死「在 BOSS 打开」，猎聘岗位点进去像跳到 BOSS）
   const openA=document.getElementById('jobOpen');
-  if(j.job_url){
+  if(_url&&_url!=='#'){
     openA.style.display='';
-    openA.href=j.job_url;
+    openA.href=_url;
     openA.textContent=_isLp?'在猎聘打开':'在 BOSS 打开';
-    openA.title=_isLp?'在猎聘官网打开该岗位':'在 BOSS 直聘打开该岗位';
+    openA.title=_isLp
+      ? `在猎聘官网打开该岗位（${_url}）${LP_LOGGED?'':'\n注意：猎聘当前未登录，详情页可能被跳到登录/中转页'}`
+      : `在 BOSS 直聘打开该岗位（${_url}）`;
   }else{
     openA.style.display='none';
     openA.removeAttribute('href');
