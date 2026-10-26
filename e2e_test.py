@@ -45,6 +45,15 @@ def main():
     db.DB_PATH = test_db
     db.init_db()
 
+    # 猎聘的登录态文件/cookie 文件也指到测试目录：它们读的是真实 data/ 下的文件，
+    # 不隔离的话「真实 cookie 有没有 lt_auth」会左右测试结果（2026-10-26 加了交叉校验后暴露）
+    import liepin as _lp_boot
+    _lp_boot.STATE_FILE = os.path.join(BASE, "data", "test_lp_state.json")
+    _lp_boot.COOKIE_FILE = os.path.join(BASE, "data", "test_lp_cookies.json")
+    for _f in (_lp_boot.STATE_FILE, _lp_boot.COOKIE_FILE):
+        if os.path.exists(_f):
+            os.remove(_f)
+
     # ---- 1. 配置读写 ----
     db.set_config({"keywords": "数据分析,BI", "cities": '[{"name":"厦门","code":"101230200"}]',
                    "pages": "3", "daily_time": "08:15", "greeting": "您好，我对该岗位很感兴趣"})
@@ -973,6 +982,15 @@ def main():
     # 岗位详情「打开原页」：文案和链接必须跟平台一致（曾写死「在 BOSS 打开」，猎聘岗位看着像跳 BOSS）
     check("UI-打开原页文案按平台切换", "?'在猎聘打开':'在 BOSS 打开'" in _html
           and '>在 BOSS 打开</a>' not in _html)
+    # 平台判定必须「域名优先」：source 字段丢失时也不能把猎聘画成 BOSS（2026-10-26 用户踩过）
+    check("UI-平台判定以链接域名为准",
+          r"/liepin\.com/i.test(String(j.job_url" in _html
+          and "const _isLp=(j.source==='liepin')||/liepin\\.com/i.test(_url)" in _html)
+    # 页面版本戳：判断浏览器是否还在用旧页面（旧页面会显示旧时间）
+    _root = client.get("/")
+    check("UI-页面版本戳已注入",
+          'id="buildStamp"' in _html and "__BUILD__" not in _root.text
+          and "v__BUILD__" not in _root.text, _root.text[_root.text.find('buildStamp'):][:60])
     t_lp, _ = db.query_jobs({"source": "liepin"})
     t_boss, rows_boss = db.query_jobs({"source": "boss"})
     check("平台-source筛选猎聘=2", t_lp == 2, f"n={t_lp}")
@@ -1007,6 +1025,20 @@ def main():
         (r["source"] or "boss") == "liepin" for r in jlp["rows"]))
     lst = client.get("/api/login_state?platform=liepin").json()
     check("平台-API-猎聘登录态键", "logged" in lst and "login_open" in lst)
+    # 猎聘登录态交叉校验（2026-10-26 实测：profile 里没有 lt_auth，界面却显示「已登录」，
+    # 点岗位被跳到登录页 —— 用户以为是跳错平台）
+    json.dump({"logged": True, "at": "2026-10-26 00:00:00", "note": "手动登录"},
+              open(lpmod.STATE_FILE, "w", encoding="utf-8"))
+    json.dump([{"name": "other", "value": "1", "domain": ".liepin.com"}],
+              open(lpmod.COOKIE_FILE, "w", encoding="utf-8"))
+    _lst = lpmod.get_login_state()
+    check("猎聘-状态说有登录但 cookie 无 lt_auth → 判未登录",
+          _lst.get("logged") is False and _lst.get("stale") is True, str(_lst.get("note")))
+    json.dump([{"name": "lt_auth", "value": "x", "domain": ".liepin.com"}],
+              open(lpmod.COOKIE_FILE, "w", encoding="utf-8"))
+    check("猎聘-cookie 有 lt_auth 才认已登录", lpmod.get_login_state().get("logged") is True)
+    check("猎聘-落盘 cookie 供校验的接口存在",
+          hasattr(lpmod, "save_cookies") and hasattr(lpmod, "cookies_have_login"))
     rk = client.get("/api/risk").json()
     check("平台-API-risk含liepin", "liepin" in rk)
     qt = client.get("/api/quota").json()
