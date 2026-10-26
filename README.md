@@ -109,14 +109,22 @@ python -c "import secrets;print(''.join(secrets.choice('abcdefghjkmnpqrstuvwxyz2
 **2. 起隧道**
 
 ```bash
-python tunnel.py          # 或 Windows 双击 start_tunnel.bat
+python tunnel.py          # 或 Windows 双击 tunnel.bat
 ```
 
-终端会打印形如 `https://xxx-xxx-xxx.trycloudflare.com` 的公网地址（同时复制到剪贴板），第一次需要把 `cloudflared.exe` 放到 `tools/` 下：
+要做的事它都自己包了：首次会**自动下载 cloudflared 到 `bin/`**（约 53MB）、没配口令会自动生成一个 10 位写进 `data/access_key.txt`、然后打印公网地址并写入 `data/tunnel_url.txt`。
 
 ```
-https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe
+==============================================================
+✅ 隧道已就绪，手机（4G/任意网络）打开这个地址：
+
+   https://xxx-xxx-xxx.trycloudflare.com
+
+   口令：abcd1234xy
+==============================================================
 ```
+
+停止：`python tunnel.py --stop`（或直接关掉那个窗口）。
 
 **3. 手机打开**该地址 → 输口令 → 之后 30 天免输；iOS 用「分享 → 添加到主屏幕」可全屏运行。
 
@@ -152,19 +160,21 @@ boss-job-tracker/
 ├── push.py             # PushPlus 微信推送
 ├── e2e_test.py         # 端到端回归测试（离线，monkeypatch 模拟浏览器）
 ├── selftest.py         # 轻量自检
-├── tunnel.py           # Cloudflare 快速隧道（手机外网访问）
+├── tunnel.py           # Cloudflare 快速隧道（手机外网访问，自动下载 cloudflared / 自动生成口令）
 ├── start.bat           # Windows 一键启动
-├── start_tunnel.bat    # Windows 一键起隧道
+├── tunnel.bat          # Windows 一键起隧道
 ├── requirements.txt
 ├── static/
 │   ├── index.html      # 单文件前端
 │   └── vendor/leaflet/ # Leaflet 1.9.4 + leaflet.heat（本地打包）
-├── tools/              # cloudflared.exe（.gitignore 排除，用时自己下载）
+├── bin/                # cloudflared.exe（.gitignore 排除，tunnel.py 首次运行自动下载）
 └── data/               # 运行时生成（.gitignore 排除，绝不上传）
     ├── jobs.db         # 岗位/批次/配置/投递记录
     ├── cities.json     # 城市字典
     ├── chrome_profile/ # 浏览器用户目录（含登录 Cookie）
     ├── boss_cookies.json / login_state.json
+    ├── liepin_cookies.json / liepin_login_state.json   # 猎聘登录态（用于 lt_auth 交叉校验）
+    ├── tunnel_url.txt  # 当前隧道公网地址（每次重启会变）
     ├── access_key.txt  # 外网访问口令（不建=不启用门禁）
     └── pushplus.txt    # PushPlus token（自己创建，仓库只给 .example）
 ```
