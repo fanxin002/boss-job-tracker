@@ -127,23 +127,37 @@ python tunnel.py          # 或 Windows 双击 tunnel.bat
 
 停止：`python tunnel.py --stop`（或直接关掉那个窗口）。
 
-**地址会不会变？**
+**地址会不会变？三条路自己选：**
 
-| 模式 | 地址 | 要做什么 |
-|---|---|---|
-| 快速隧道（默认） | **每次重启都变**（随机子域名） | 什么都不用配 |
-| 命名隧道（推荐长期用） | **固定不变**（如 `jobs.你的域名.com`） | 需要 Cloudflare 账号 + 一个托管在 Cloudflare 的域名 |
+| 通道 | 地址 | 花钱 | 需要什么 |
+|---|---|---|---|
+| **ngrok**（推荐） | **固定**：账号自带的 `xxx.ngrok-free.dev`，重启也不变 | 免费 | 注册 ngrok（邮箱即可，不绑卡）→ 复制 authtoken |
+| Cloudflare 命名隧道 | **固定**：自己的域名，如 `jobs.abc.com` | 域名约 ¥10/年 | Cloudflare 账号 + 托管在 CF 的域名 |
+| Cloudflare 快速隧道（默认） | 每次重启都变（随机子域名） | 免费 | 什么都不用配 |
 
-快速隧道换地址时不用慌：新地址会自动写进 `data/tunnel_url.txt`，并且**如果你配了 PushPlus，地址一变就推微信**（出门在外也能找到新链接）。
+**想要固定地址 → 用 ngrok（最省事）**：
 
-固定地址的做法（一次性 5 分钟）：
+```bash
+python tunnel.py --token 你的ngrok_authtoken   # 只需一次，写进 data/ngrok_token.txt
+python tunnel.py                               # 以后每次都是同一个地址
+```
+
+注册地址 https://dashboard.ngrok.com/signup ，登录后 **Your Authtoken** 里复制。
+
+ngrok 免费的代价（知道就行，不影响个人用）：
+
+- 浏览器首次访问会出现一个「Visit Site」提示页，点一下，之后 7 天内不再出现
+- 免费额度：**2 万请求/月、1GB 流量/月**。所以页面在后台/锁屏时**不轮询**（已内置，切回来立刻恢复），正常刷几十次完全用不完
+- 想换通道：`--provider ngrok` / `--provider cf`；也可以把选择写进 `data/tunnel_provider.txt`
+
+**想要固定地址 + 自己的域名 → Cloudflare 命名隧道**：
 
 1. Cloudflare 控制台 → Zero Trust → Networks → Tunnels → Create a tunnel（选 Cloudflared）
-2. 建好后复制它给的 **token**，写进 `data/cloudflared_token.txt`（整行粘贴即可）
-3. 在该隧道的 **Public Hostname** 里绑一个域名 → 服务填 `http://127.0.0.1:8765`
-4. 把域名写进 `data/tunnel_host.txt`（只为让脚本打印时能显示出来）
+2. 复制它给的 **token**：`python tunnel.py --token 你的CF_token`
+3. 在该隧道的 **Public Hostname** 绑域名 → 服务填 `http://127.0.0.1:8765`
+4. 把域名写进 `data/tunnel_host.txt`（只为打印显示）
 
-之后 `python tunnel.py` 会自动走命名隧道，地址永远是那个域名。
+快速隧道换地址时不用慌：新地址会写进 `data/tunnel_url.txt`，并且**配了 PushPlus 就会自动推微信**，出门在外也能找到新链接。
 
 **3. 手机打开**该地址 → 输口令 → 之后 30 天免输；iOS 用「分享 → 添加到主屏幕」可全屏运行。
 
@@ -186,7 +200,7 @@ boss-job-tracker/
 ├── static/
 │   ├── index.html      # 单文件前端
 │   └── vendor/leaflet/ # Leaflet 1.9.4 + leaflet.heat（本地打包）
-├── bin/                # cloudflared.exe（.gitignore 排除，tunnel.py 首次运行自动下载）
+├── bin/                # cloudflared.exe / ngrok.exe（.gitignore 排除，tunnel.py 首次运行自动下载）
 └── data/               # 运行时生成（.gitignore 排除，绝不上传）
     ├── jobs.db         # 岗位/批次/配置/投递记录
     ├── cities.json     # 城市字典
