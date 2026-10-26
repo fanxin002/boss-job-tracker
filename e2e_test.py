@@ -1392,6 +1392,42 @@ def main():
     else:
         check("口令-未配置时完全放行", client.get("/api/counts").status_code == 200)
 
+    # ---- 抓取浏览器：Chrome / Edge 双支持 ----
+    r = client.get("/api/browser")
+    check("浏览器-接口可用", r.status_code == 200)
+    b = r.json()
+    avail = b.get("available") or []
+    check("浏览器-返回本机可用列表", isinstance(avail, list))
+    check("浏览器-偏好取值合法", b.get("pref") in ("auto", "chrome", "edge"))
+    check("浏览器-可用项字段完整",
+          all(x.get("name") in ("chrome", "edge") and x.get("exe") and x.get("version")
+              for x in avail))
+    if avail:
+        check("浏览器-当前选择必须在可用列表内",
+              any(x["name"] == b["current"].get("name") for x in avail))
+        check("浏览器-非自动时当前项等于偏好",
+              b["pref"] == "auto" or b["current"].get("name") == b["pref"])
+    check("浏览器-拒绝未知浏览器",
+          client.post("/api/browser", json={"name": "firefox"}).json().get("ok") is False)
+    # profile 分家：换浏览器只给 Edge 加后缀，Chrome 路径必须原样（否则现有登录态全丢）
+    check("浏览器-Chrome profile 路径不变",
+          crawler.profile_for_browser(crawler.PROFILE_DIR, "chrome") == crawler.PROFILE_DIR)
+    _edge_prof = crawler.profile_for_browser(crawler.PROFILE_DIR, "edge")
+    check("浏览器-Edge profile 独立", _edge_prof != crawler.PROFILE_DIR and
+          _edge_prof.endswith("_edge"))
+    check("浏览器-profile 不受尾部斜杠影响",
+          crawler.profile_for_browser(crawler.PROFILE_DIR + "\\", "edge") == _edge_prof)
+    check("浏览器-无头 UA 不带 Headless 特征",
+          "Headless" not in crawler.browser_ua("chrome", None)
+          and "Headless" not in crawler.browser_ua("edge", None))
+    check("浏览器-Edge UA 带 Edg 段，Chrome 不带",
+          "Edg/" in crawler.browser_ua("edge", None)
+          and "Edg/" not in crawler.browser_ua("chrome", None))
+    check("浏览器-前端有切换入口",
+          'id="chipBrowser"' in _html and "function showBrowserPick(" in _html
+          and "function loadBrowser(" in _html)
+    check("浏览器-前端启动时加载浏览器信息", "safe(()=>loadBrowser())" in _html)
+
     # ---- 汇总 ----
     passed = sum(1 for s, *_ in RESULTS if s == "PASS")
     failed = [n for s, n, d in RESULTS if s == "FAIL"]
