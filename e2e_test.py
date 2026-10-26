@@ -1024,6 +1024,30 @@ def main():
     check("UI-页面版本戳已注入",
           'id="buildStamp"' in _html and "__BUILD__" not in _root.text
           and "v__BUILD__" not in _root.text, _root.text[_root.text.find('buildStamp'):][:60])
+
+    # ---- 手机版：独立页面 /m + 手机 UA 自动跳转 ----
+    _mres = client.get("/m")
+    _mhtml = _mres.text
+    check("手机版-/m 可访问且是独立页面",
+          _mres.status_code == 200 and 'id="jobList"' in _mhtml
+          and 'class="tabbar"' in _mhtml and 'id="jobSheet"' in _mhtml
+          and "__BUILD__" not in _mhtml, str(_mres.status_code))
+    check("手机版-不依赖桌面表格布局",
+          "jobList" in _mhtml and "<table" not in _mhtml.lower(),
+          "含 table" if "<table" in _mhtml.lower() else "无表格")
+    _ua = ("Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 "
+           "(KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1")
+    _mr = client.get("/", headers={"user-agent": _ua}, follow_redirects=False)
+    check("手机版-手机UA访问 / 自动跳 /m",
+          _mr.status_code in (302, 307) and _mr.headers.get("location") == "/m",
+          f"{_mr.status_code} {_mr.headers.get('location')}")
+    _md = client.get("/?desktop=1", headers={"user-agent": _ua})
+    check("手机版-?desktop=1 强制电脑版",
+          _md.status_code == 200 and 'id="nav-jobs"' in _md.text and 'class="tabbar"' not in _md.text)
+    _pc = client.get("/", headers={"user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+                     follow_redirects=False)
+    check("手机版-桌面UA仍进电脑版", _pc.status_code == 200 and 'id="nav-jobs"' in _pc.text,
+          str(_pc.status_code))
     t_lp, _ = db.query_jobs({"source": "liepin"})
     t_boss, rows_boss = db.query_jobs({"source": "boss"})
     check("平台-source筛选猎聘=2", t_lp == 2, f"n={t_lp}")
