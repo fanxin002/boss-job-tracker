@@ -100,9 +100,20 @@ async def _access_gate(request: Request, call_next):
         return await call_next(request)
     host = (request.client.host if request.client else "") or ""
     via_proxy = bool(request.headers.get("cf-connecting-ip") or request.headers.get("cf-ray")
-                     or request.headers.get("x-forwarded-for"))
-    # testclient 是 Starlette TestClient 的虚拟来源，走不到网络上，放行让 e2e 能测真实逻辑
-    if host in ("127.0.0.1", "::1", "localhost", "testclient") and not via_proxy:
+                     or request.headers.get("x-forwarded-for") or request.headers.get("ngrok-trace-id"))
+    # 判「本机直连」不能只看来源 IP：ngrok / cloudflared 都是在本机把请求转进来的，
+    # 来源同样是 127.0.0.1。**必须再看 Host 头**——
+    # 2026-10-26 实测：ngrok 转发不带 CF-Connecting-IP（也不带 X-Forwarded-For），
+    # 只靠来源 IP + 代理头判断，隧道流量会被当成「自己电脑」直接放行，口令闸形同虚设。
+    # 本机访问时 Host 一定是 127.0.0.1 / localhost；走隧道时 Host 是 xxx.ngrok-free.dev 等。
+    host_hdr = (request.headers.get("host") or "").split(":")[0].strip().lower().strip("[]")
+    loopback_host = host_hdr in ("127.0.0.1", "localhost", "::1")
+    if host == "testclient" and host_hdr in ("testserver", "") and not via_proxy:
+        # Starlette TestClient：虚拟来源，永远走不到网络上（Host 默认 testserver），
+        # 放行让 e2e 能测真实逻辑。但它一旦带了 CF/ngrok 转发头、或把 Host 改成隧道域名，
+        # 就必须按隧道处理 —— 否则门禁根本测不出来（2026-10-26 的 ngrok 放行漏洞就是这么漏的）
+        return await call_next(request)
+    if host in ("127.0.0.1", "::1", "localhost") and not via_proxy and loopback_host:
         return await call_next(request)          # 本机直连：免口令
     path = request.url.path
     if path == "/__login":
