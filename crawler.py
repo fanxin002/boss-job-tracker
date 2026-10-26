@@ -14,10 +14,168 @@ import db
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROFILE_DIR = os.path.join(db.DATA_DIR, "chrome_profile")
 
-CHROME_CANDIDATES = [
-    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-]
+# ---------- 浏览器选择：Chrome 优先，装不上就自动退到 Edge ----------
+# 两个都是 Chromium 内核，DrissionPage 同一套 CDP 接口，代码完全通用。
+# 差异只在三处：exe 路径、User-Agent 里的品牌段、user-data-dir 必须分家
+# （不同浏览器写同一个 profile 目录会互相污染登录态）。
+_LOCAL = os.environ.get("LOCALAPPDATA", r"C:\Users\Default\AppData\Local")
+BROWSER_PATHS = {
+    "chrome": [
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        os.path.join(_LOCAL, r"Google\Chrome\Application\chrome.exe"),
+    ],
+    "edge": [
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+        os.path.join(_LOCAL, r"Microsoft\Edge\Application\msedge.exe"),
+    ],
+}
+BROWSER_LABELS = {"chrome": "Chrome", "edge": "Edge"}
+BROWSER_PROC = {"chrome": "chrome.exe", "edge": "msedge.exe"}
+PREF_FILE = os.path.join(db.DATA_DIR, "browser_pref.json")
+UA_FILE = os.path.join(db.DATA_DIR, "browser_ua.json")   # 真机 UA 缓存（见 remember_ua）
+PREF_ENV = "JOB_BROWSER"          # 环境变量可强制：chrome / edge
+_ver_cache = {}
+
+# 兼容旧名（外部脚本/文档里引用过）
+CHROME_CANDIDATES = BROWSER_PATHS["chrome"]
+
+
+def _exe_version(exe):
+    """从 exe 同级的版本目录名（如 130.0.6723.92）取版本号，纯文件系统操作。
+    Application 目录下就躺着这个版本目录，比调 PowerShell 读 VersionInfo 快得多。"""
+    if exe in _ver_cache:
+        return _ver_cache[exe]
+    ver = ""
+    try:
+        for d in os.listdir(os.path.dirname(exe)):
+            parts = d.split(".")
+            if len(parts) == 4 and all(x.isdigit() for x in parts):
+                if not ver or tuple(map(int, d.split("."))) > tuple(map(int, ver.split("."))):
+                    ver = d
+    except Exception:
+        pass
+    ver = ver or "130.0.0.0"
+    _ver_cache[exe] = ver
+    return ver
+
+
+def available_browsers():
+    """探测本机装了哪些浏览器：[{name,label,exe,version}]，按 chrome→edge 排序"""
+    out = []
+    for name in ("chrome", "edge"):
+        exe = next((p for p in BROWSER_PATHS[name] if os.path.exists(p)), None)
+        if exe:
+            out.append({"name": name, "label": BROWSER_LABELS[name],
+                        "exe": exe, "version": _exe_version(exe)})
+    return out
+
+
+def get_browser_pref():
+    """读偏好：环境变量 > data/browser_pref.json > auto"""
+    env = (os.environ.get(PREF_ENV) or "").strip().lower()
+    if env in ("chrome", "edge"):
+        return env
+    try:
+        import json as _json
+        with open(PREF_FILE, encoding="utf-8") as f:
+            v = str((_json.load(f) or {}).get("browser") or "").strip().lower()
+        if v in ("chrome", "edge", "auto"):
+            return v
+    except Exception:
+        pass
+    return "auto"
+
+
+def set_browser_pref(name):
+    """设置偏好（auto/chrome/edge）。改成 auto 时删除文件即可。"""
+    import json as _json
+    name = (name or "").strip().lower()
+    if name not in ("auto", "chrome", "edge"):
+        raise ValueError("浏览器只能是 auto / chrome / edge")
+    try:
+        if name == "auto":
+            os.remove(PREF_FILE)
+        else:
+            with open(PREF_FILE, "w", encoding="utf-8") as f:
+                _json.dump({"browser": name}, f, ensure_ascii=False)
+    except FileNotFoundError:
+        pass
+    return name
+
+
+def pick_browser(prefer=None):
+    """返回 (name, exe)。指定了 prefer 就只用它；否则 auto = Chrome 优先、退 Edge。
+    两个都没有 → 返回 (None, None)，由调用方给出明确报错（不再静默启动失败）。"""
+    avail = {b["name"]: b["exe"] for b in available_browsers()}
+    want = (prefer or get_browser_pref()).strip().lower()
+    if want in ("chrome", "edge"):
+        if want in avail:
+            return want, avail[want]
+        # 指定了但没装 → 仍按 auto 兜底，不让任务直接卡死
+    for n in ("chrome", "edge"):
+        if n in avail:
+            return n, avail[n]
+    return None, None
+
+
+def browser_ua(name, exe):
+    """headless 模式必须覆盖默认 UA（带 HeadlessChrome 特征会被 BOSS 风控直接判
+    code=37），覆盖的这份要和实际浏览器品牌一致 —— Chrome 的 UA 里说 Edge、
+    或 Edge 里说 Chrome，反而更像伪造。
+
+    版本号格式有个坑：Chrome/Edge 都启用了 UA Reduction，真机上报的是
+    `Chrome/155.0.0.0`（次版本冻结成 0），不是 `155.0.4314.42`。
+    实测 Edge 156 离屏模式 navigator.userAgent 就是 155.0.0.0，
+    所以这里也按 major.0.0.0 生成；拿到过真机 UA 就直接用真机那份。"""
+    ver = _exe_version(exe) if exe else "130.0.0.0"
+    major = ver.split(".")[0]
+    try:
+        import json as _json
+        with open(UA_FILE, encoding="utf-8") as f:
+            c = (_json.load(f) or {}).get(name) or {}
+        # 用 exe 版本比对，不要用 UA 里的 Chrome major：Edge 156 的 UA 报的是 Chrome 155，
+        # 拿 UA 的 major 去比永远对不上，缓存形同失效
+        if c.get("ver") == ver and c.get("ua"):
+            return c["ua"]
+    except Exception:
+        pass
+    base = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/%s.0.0.0 Safari/537.36" % major)
+    if name == "edge":
+        base += " Edg/%s.0.0.0" % major
+    return base
+
+
+def remember_ua(name, ua, exe=None):
+    """有头/离屏模式读到真机 UA 就缓存下来，之后无头模式直接用这份，
+    连 major 版本差一档的风险都没有（Edge 156 的 UA 里报的是 Chrome 155）。"""
+    import json as _json
+    ua = (ua or "").strip()
+    if not ua or "Headless" in ua:
+        return
+    data = {}
+    try:
+        with open(UA_FILE, encoding="utf-8") as f:
+            data = _json.load(f) or {}
+    except Exception:
+        data = {}
+    data[name] = {"ua": ua, "ver": _exe_version(exe) if exe else "",
+                  "at": time.strftime("%Y-%m-%d %H:%M:%S")}
+    try:
+        with open(UA_FILE, "w", encoding="utf-8") as f:
+            _json.dump(data, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def profile_for_browser(profile, name):
+    """profile 目录按浏览器分家：Edge 走 `<原名>_edge`。
+    Chrome 和 Edge 不能共用一个 user-data-dir，否则后启动的会认为 profile 被占用/损坏。
+    Chrome 保持原路径不变，已有登录态零迁移。"""
+    profile = profile.rstrip("\\/")
+    return profile + "_edge" if name == "edge" else profile
 
 # 在列表页上下文内调接口：携带完整 cookie/wt2 会话，绕开 DOM 字体加密薪资
 # 注意：DrissionPage run_js 不支持顶层 await，必须返回 Promise（awaitPromise 自动等待）
@@ -48,15 +206,22 @@ def _get_free_port():
     return port
 
 
-def cleanup_stale_browsers(match=None):
-    """杀掉使用本项目 profile 的残留 Chrome 进程（精确匹配命令行，不碰日常浏览器）。
-    match 给定时只杀命令行含该串的进程（平台隔离：清 boss 不误杀猎聘，反之亦然）"""
+def cleanup_stale_browsers(match=None, exe=None):
+    """杀掉使用本项目 profile 的残留浏览器进程（精确匹配命令行，不碰日常浏览器）。
+    match 给定时只杀命令行含该串的进程（平台隔离：清 boss 不误杀猎聘，反之亦然）。
+    exe 给定时只扫对应进程名（chrome.exe / msedge.exe），避免多扫一遍。"""
     try:
         import subprocess
-        frag = match or "boss-job-tracker"
-        q = ("Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
+        frag = (match or "boss-job-tracker").replace("'", "")
+        if exe:
+            base = os.path.basename(exe).lower()
+            names = [base] if base in BROWSER_PROC.values() else list(BROWSER_PROC.values())
+        else:
+            names = list(BROWSER_PROC.values())
+        nf = " or ".join("Name='%s'" % n for n in names)
+        q = ("Get-CimInstance Win32_Process -Filter \"%s\" | "
              "Where-Object { $_.CommandLine -like '*%s*' } | "
-             "ForEach-Object { $_.ProcessId }") % frag
+             "ForEach-Object { $_.ProcessId }") % (nf, frag)
         out = subprocess.run(["powershell", "-NoProfile", "-Command", q],
                              capture_output=True, text=True, timeout=30).stdout
         for pid in out.split():
@@ -74,18 +239,15 @@ _browsers = {"boss": _browser}                  # 按 slot 隔离：liepin 等�
 
 # 指纹加固：抹掉自动化痕迹，补齐真人浏览器该有的属性
 # 只做「还原成普通浏览器」的伪装，不伪造敏感字段；每个新 document 生效
+# 2026-10-26 实测（Chrome 155 / Edge 156 四组对比）：navigator.plugins（5 个）、
+# mimeTypes（2 个）、hardwareConcurrency（12）在真机无头/离屏下本来就是正常的，
+# 原先硬编码成 3 个假插件、8 核反而与真机不符 —— 这些项一旦哪天真的生效就是破绽，
+# 因此全部删除，只保留真正需要抹掉的 webdriver / chrome 对象 / permissions。
 _STEALTH_JS = """
 Object.defineProperty(navigator,'webdriver',{get:()=>undefined});
 if(!window.chrome) window.chrome={};
 if(!window.chrome.runtime) window.chrome.runtime={};
 Object.defineProperty(navigator,'languages',{get:()=>['zh-CN','zh','en']});
-Object.defineProperty(navigator,'plugins',{get:()=>[
-  {name:'Chrome PDF Plugin',filename:'internal-pdf-viewer',description:'Portable Document Format'},
-  {name:'Chrome PDF Viewer',filename:'mhjfbmdgcfjbbpaeojofohoefgiehjai',description:''},
-  {name:'Native Client',filename:'internal-nacl-plugin',description:''}]});
-Object.defineProperty(navigator,'mimeTypes',{get:()=>[{type:'application/pdf'},{type:'application/x-google-chrome-pdf'}]});
-Object.defineProperty(navigator,'hardwareConcurrency',{get:()=>8});
-Object.defineProperty(navigator,'deviceMemory',{get:()=>8});
 if(navigator.permissions&&navigator.permissions.query){
   var _q=navigator.permissions.query.bind(navigator.permissions);
   navigator.permissions.query=function(p){
@@ -115,35 +277,38 @@ def _page_alive(page):
 
 
 def ensure_browser(headless=False, offscreen=False, profile=None, slot="boss"):
-    """进程内按 slot 单例：复用同一浏览器；模式变化则重建。
+    """进程内按 slot 单例：复用同一浏览器；模式/浏览器变化则重建。
     slot 隔离：boss 与猎聘各自独立 profile / 独立浏览器实例，互不抢占。
     三种模式：
       headless=True          真无头（最快，但 HeadlessChrome 指纹易被识别 → code=37）
-      offscreen=True         离屏有头：真实浏览器窗口挪到屏幕外，用户看不见，指纹是真 Chrome（推荐）
+      offscreen=True         离屏有头：真实浏览器窗口挪到屏幕外，用户看不见，指纹是真浏览器（推荐）
       headless=offscreen=False  可见有头（登录/过验证用）
+    浏览器：Chrome 优先，本机没装则自动用 Edge（可被 data/browser_pref.json 指定）
     注意：无头必须用 DrissionPage 官方 co.headless()，raw 参数 --headless=new 会导致 CDP 连接 404"""
     from DrissionPage import ChromiumPage, ChromiumOptions
     mode = "headless" if headless else ("offscreen" if offscreen else "headed")
-    profile = profile or PROFILE_DIR
+    name, exe = pick_browser()
+    if not exe:
+        raise RuntimeError("本机既没装 Chrome 也没装 Edge，无法启动浏览器。"
+                           "装任一即可（命令里不用改，代码会自动选）。")
+    profile = profile_for_browser(profile or PROFILE_DIR, name)
     browser = _browsers.setdefault(slot, {"page": None, "headless": None})
     page = browser["page"]
     if page is not None and _page_alive(page):
-        if browser["headless"] == mode:
+        if browser["headless"] == mode and browser.get("name") == name:
             return page
         try:
             page.quit()
         except Exception:
             pass
         browser["page"] = None
-    exe = next((p for p in CHROME_CANDIDATES if os.path.exists(p)), None)
     os.makedirs(profile, exist_ok=True)
     last_err = None
     for attempt in range(2):
         if attempt:
-            cleanup_stale_browsers(match=os.path.join(profile, ""))
+            cleanup_stale_browsers(match=os.path.join(profile, ""), exe=exe)
         co = ChromiumOptions()
-        if exe:
-            co.set_browser_path(exe)
+        co.set_browser_path(exe)
         co.set_local_port(_get_free_port())
         co.set_argument(f"--user-data-dir={profile}")
         co.set_argument("--disable-blink-features=AutomationControlled")
@@ -152,13 +317,15 @@ def ensure_browser(headless=False, offscreen=False, profile=None, slot="boss"):
         co.set_argument("--window-size=1280,900")
         co.set_argument("--lang=zh-CN")          # 语言指纹与中文环境一致
         co.set_argument("--accept-lang=zh-CN,zh")
+        if name == "edge":
+            # Edge 特有：别让它自动拿微软账号登进 profile，也关掉首次运行向导
+            co.set_argument("--no-service-autorun")
+            co.set_argument("--disable-features=msImplicitSignin,msEdgeWelcomePage")
         if mode == "headless":
             co.headless()  # 官方无头开关
             # 无头模式 UA 默认带 "HeadlessChrome" 特征，BOSS 风控直接识别（code=37 环境异常）
-            # 用普通 Chrome UA 覆盖，配合下面的 JS 注入抹掉 webdriver 痕迹
-            co.set_user_agent(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36")
+            # 用真实品牌+版本的 UA 覆盖，配合下面的 JS 注入抹掉 webdriver 痕迹
+            co.set_user_agent(browser_ua(name, exe))
         elif mode == "offscreen":
             # 真实有头浏览器，只是窗口放到屏幕外 → 不打扰用户，同时没有无头指纹
             co.set_argument("--window-position=-3200,-3200")
@@ -171,10 +338,16 @@ def ensure_browser(headless=False, offscreen=False, profile=None, slot="boss"):
             except Exception:
                 pass
             browser["page"], browser["headless"] = page, mode
+            browser.update(name=name, exe=exe, profile=profile)
+            if mode != "headless":      # 真机 UA 才可信，顺手缓存给无头模式复用
+                try:
+                    remember_ua(name, page.run_js("return navigator.userAgent"), exe)
+                except Exception:
+                    pass
             return page
         except Exception as e:
             last_err = e
-    raise RuntimeError(f"浏览器启动失败：{last_err}")
+    raise RuntimeError(f"{BROWSER_LABELS.get(name, name)} 启动失败：{last_err}")
 
 
 def human_scroll(page, times=3):
@@ -386,6 +559,8 @@ def inject_cookies(page):
 def _close_browser(slot="boss"):
     browser = _browsers.get(slot, _browser)
     p = browser["page"]
+    prof = browser.get("profile") or PROFILE_DIR
+    exe = browser.get("exe")
     browser["page"] = browser["headless"] = None
     if p:
         try:
@@ -393,7 +568,16 @@ def _close_browser(slot="boss"):
             return
         except Exception:
             pass
-    cleanup_stale_browsers(match=os.path.join(PROFILE_DIR, ""))
+    cleanup_stale_browsers(match=os.path.join(prof, ""), exe=exe)
+
+
+def close_all():
+    """关掉所有 slot 的浏览器（切换浏览器偏好时用）"""
+    for slot in list(_browsers.keys()):
+        try:
+            _close_browser(slot)
+        except Exception:
+            pass
 
 
 def login_flow():
