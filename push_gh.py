@@ -6,11 +6,11 @@ TOKEN = os.environ.get("GH_TOKEN", "")
 OWNER, REPO, BRANCH = "fanxin002", "boss-job-tracker", "main"
 API = f"https://api.github.com/repos/{OWNER}/{REPO}/contents"
 ROOT = os.path.dirname(os.path.abspath(__file__))
-FILES = ["crawler.py", "app.py", "static/index.html", "e2e_test.py", "README.md", "push_gh.py"]
-MSG = ("feat(browser): support Edge alongside Chrome - auto-detect (Chrome first, fall back to Edge), "
-       "per-browser user-data-dir isolation (*_edge), real-device UA cache (UA Reduction aware), "
-       "top-bar browser switcher + /api/browser; drop plugins/hardwareConcurrency spoofing "
-       "that never took effect and contradicted real-device values")
+FILES = ["static/index.html", "e2e_test.py", "push_gh.py"]
+MSG = ("style(config): unify the settings page - same 960px column for every card (was 860 main + "
+       "full-width tables), hide the job-stats hero outside the job list, section/label rhythm aligned, "
+       "soft secondary links instead of float+uppercase, rounded chips/opts, skills grouped into "
+       "core/others instead of alternating dark-light tags")
 
 # 隐私闸：推送前扫一遍要上传的文件，命中就拒绝推送（仓库是 public）
 # 2026-10-23 踩过的坑：e2e 的简历测试样本用了真实姓名+真实公司，从第一个 commit
