@@ -1428,6 +1428,38 @@ def main():
           and "function loadBrowser(" in _html)
     check("浏览器-前端启动时加载浏览器信息", "safe(()=>loadBrowser())" in _html)
 
+    # ---- 获取配置页外观（2026-10-27 统一：同宽/同节奏/圆角/hero 随视图显隐）----
+    check("配置页-外层统一限宽",
+          "#view-config{max-width:960px;margin:0 auto}" in _html)
+    check("配置页-主卡片不再自带宽度",
+          'id="cfgCard" style="max-width' not in _html)
+    check("配置页-上下卡片同宽（含获取历史/投递记录）",
+          "#view-config .card{margin-bottom:20px}" in _html)
+    check("配置页-section 间距统一",
+          "#view-config .sect{margin:34px 0 6px" in _html)
+    check("配置页-两栏三栏间距一致",
+          "#view-config .row2,#view-config .row3{gap:16px}" in _html)
+    check("配置页-次要操作改用软链接（不再是标题级字重）",
+          ".linkbtn.soft{" in _html and 'class="linkbtn soft"' in _html)
+    check("配置页-城市同步按钮不再 float 抢基线",
+          '<label>城市 <span style="float:right">' not in _html and 'class="label-row"' in _html)
+    check("配置页-说明字段与输入框对齐（不再 padding 硬凑）",
+          ".field-note{" in _html and 'class="field-note"' in _html)
+    check("配置页-底部操作条有分隔线",
+          ".form-actions{" in _html and 'class="form-actions"' in _html)
+    check("设计-筛选块与城市标签用圆角 token",
+          ".opt{padding:8px 14px" in _html
+          and _html[_html.find(".opt{"):_html.find(".opt{") + 320].find("border-radius:var(--r-xs)") >= 0
+          and _html[_html.find(".ctag{"):_html.find(".ctag{") + 260].find("border-radius:var(--r-xs)") >= 0)
+    check("画像-信息卡固定四列且圆角",
+          ".prof-meta{display:grid;grid-template-columns:repeat(4,minmax(0,1fr))" in _html)
+    check("画像-技能按核心/其他分组渲染",
+          ".prof-skillgroup" in _html and "prof-skillgroup" in _html.split("function renderProfile")[1][:2600])
+    check("画像-技能分组不再深浅交替",
+          "coreList.map(s=>chip(s,true))" in _html and "restList.map(s=>chip(s,false))" in _html)
+    check("视图-深色 hero 只在岗位列表显示",
+          "hp.style.display=(v==='jobs')" in _html and "querySelector('.hero')" in _html)
+
     # ---- 汇总 ----
     passed = sum(1 for s, *_ in RESULTS if s == "PASS")
     failed = [n for s, n, d in RESULTS if s == "FAIL"]
