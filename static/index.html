@@ -186,7 +186,7 @@
     outline:none;box-shadow:none!important;background:transparent;border-radius:var(--r-xs)}
   .ctag.nolp{background:#fffaf0;border-color:#f0c36d;color:#b45309}
   .ctag{display:inline-flex;align-items:center;gap:6px;background:var(--surface-soft);border:1px solid var(--hairline);
-    color:var(--ink);padding:2px 8px;font-size:13px;line-height:1.6}
+    color:var(--ink);padding:2px 8px;font-size:13px;line-height:1.6;border-radius:var(--r-xs)}
   .ctag i{font-style:normal;cursor:pointer;color:var(--muted-soft);font-size:13px}
   .ctag i:hover{color:var(--error)}
   .drop{position:absolute;left:0;right:0;top:calc(100% + 4px);background:var(--canvas);border:1px solid var(--hairline);
@@ -202,9 +202,34 @@
   /* ---------- 选择 chip（filter-chip） ---------- */
   .opts{display:flex;flex-wrap:wrap;gap:8px}
   .opt{padding:8px 14px;border:1px solid var(--hairline-strong);background:var(--canvas);color:var(--ink);
-    font-size:12px;font-weight:400;letter-spacing:.5px;cursor:pointer;line-height:1.2}
+    font-size:12px;font-weight:400;letter-spacing:.5px;cursor:pointer;line-height:1.2;border-radius:var(--r-xs);
+    transition:border-color var(--dur) var(--ease),background-color var(--dur) var(--ease),color var(--dur) var(--ease)}
   .opt:hover{border-color:var(--ink)}
   .opt.on{background:var(--ink);border-color:var(--ink);color:var(--on-dark);font-weight:700}
+
+  /* ---------- 获取配置页 ---------- */
+  /* 整页同宽：原来主卡片 860、下面「获取历史/投递记录」两张表是全宽，
+     切页时宽度来回跳，很割裂。统一交给外层容器约束，卡片自己不再写 max-width */
+  #view-config{max-width:960px;margin:0 auto}
+  #cfgCard{padding:32px 36px}
+  #view-config .card{margin-bottom:20px}
+  /* section 节奏统一：上分隔大、下留小，紧接的表单不会贴到分隔线上 */
+  #view-config .sect{margin:34px 0 6px;padding-bottom:10px}
+  #view-config .sect:first-of-type{margin-top:6px}
+  #view-config .row2,#view-config .row3{gap:16px}
+  /* label 行：标题在左、次要操作靠右（不用 float，避免和标题抢基线） */
+  .label-row{display:flex;align-items:baseline;gap:12px}
+  .label-row > span:first-child{flex:0 0 auto}
+  .field-actions{margin-left:auto;display:flex;align-items:center;gap:16px;white-space:nowrap}
+  /* 次要操作：去掉 uppercase + 1.2px 字距 + 700 的"标题感"，回到普通链接层级 */
+  .linkbtn.soft{font-size:12px;font-weight:400;letter-spacing:0;text-transform:none;color:var(--muted)}
+  .linkbtn.soft:hover{color:var(--primary)}
+  /* 说明型字段：label 下直接开始，与左侧输入框顶部自然齐平 */
+  .field-note{font-size:12px;color:var(--muted-soft);line-height:1.65}
+  .field-note b{color:var(--body);font-weight:700}
+  /* 表单操作条：与上方内容用一条发丝线分开，不再直接悬空 */
+  .form-actions{margin-top:30px;padding-top:20px;border-top:1px solid var(--hairline);
+    display:flex;gap:16px;align-items:center;flex-wrap:wrap}
 
   /* ---------- 筛选 ---------- */
   /* 筛选区：给控件一块浅底分组面板，把"表单方阵"变成"分组区域"（控件本身已是圆角）
@@ -372,11 +397,20 @@
   .brow2 b{text-align:right;font-weight:500;color:#404040;font-variant-numeric:tabular-nums}
 
   /* ---------- 简历画像 ---------- */
-  .prof-meta{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px 18px;
-    padding:12px 14px;background:var(--surface-soft);border:1px solid var(--hairline);font-size:12px;color:var(--muted)}
+  /* 固定 4 列：7 项信息排成 4+3，比 auto-fill 挤成 5+2 更整齐 */
+  .prof-meta{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px 18px;
+    padding:14px 16px;background:var(--surface-soft);border:1px solid var(--hairline);
+    border-radius:var(--r-sm);font-size:12px;color:var(--muted)}
   .prof-meta b{color:var(--ink);font-weight:500}
-  .prof-skills{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
-  .prof-skills .tag{white-space:nowrap}
+  @media (max-width:760px){.prof-meta{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  /* 技能分两组：核心（深色）在前、其余（浅色）在后，避免深浅色在同一片网格里交替跳 */
+  .prof-skills{margin-top:14px}
+  .prof-skillgroup + .prof-skillgroup{margin-top:12px}
+  .prof-skillgroup .gl{font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;
+    color:var(--muted-soft);margin-bottom:8px}
+  .prof-skillgroup .gl b{color:var(--ink);letter-spacing:0;text-transform:none;font-weight:700;margin-left:6px}
+  .prof-skillgroup .tags{display:flex;flex-wrap:wrap;gap:6px}
+  .prof-skillgroup .tags .tag{white-space:nowrap}
 
   /* ---------- 弹窗 ---------- */
   .mask{position:fixed;inset:0;background:rgba(26,33,41,.55);display:none;align-items:center;justify-content:center;
@@ -808,7 +842,7 @@
     </div>
 
     <div id="view-config" style="display:none">
-      <div class="card" id="cfgCard" style="max-width:860px;margin:0 auto">
+      <div class="card" id="cfgCard">
         <h3>获取配置</h3>
         <div class="sect">平台开关（点一次「立即获取」= 按顺序跑所有启用的平台）</div>
         <div class="row3">
@@ -816,15 +850,15 @@
           <div><label>猎聘</label><select id="cfgLiepinEnabled"><option value="0">关闭</option><option value="1">开启</option></select></div>
           <div><label>猎聘每城页数</label><select id="cfgLiepinPages"><option value="1">1 页</option><option value="2" selected>2 页</option><option value="3">3 页</option><option value="5">5 页</option></select></div>
         </div>
-        <div class="muted" id="platSummary" style="margin-bottom:6px"></div>
+        <div class="muted" id="platSummary" style="margin-top:10px"></div>
         <div id="platWarn"></div>
-        <div class="muted" style="line-height:1.6">关键词、城市、定时、浏览器模式两平台<b>共用一份配置</b>；风控与请求预算两平台各算各的。登录点顶部两个平台胶囊（「BOSS」「猎聘」各自独立登录态，长期有效）。猎聘只做获取/入库/看板合并，投递请到猎聘官网手动。</div>
+        <div class="muted" style="margin-top:6px;line-height:1.7">关键词、城市、定时、浏览器模式两平台<b>共用一份配置</b>；风控与请求预算两平台各算各的。登录点顶部两个平台胶囊（「BOSS」「猎聘」各自独立登录态，长期有效）。猎聘只做获取/入库/看板合并，投递请到猎聘官网手动。</div>
 
         <div class="sect">搜索范围（两平台共用）</div>
         <label>关键词（英文逗号分隔）</label>
         <input type="text" id="cfgKeywords" placeholder="数据分析,数据分析师,BI工程师">
 
-        <label>城市 <span style="float:right"><button class="linkbtn" onclick="syncCities()">同步 BOSS 城市库</button><span style="color:var(--hairline-strong);margin:0 10px">|</span><button class="linkbtn" onclick="syncLpCities()">同步猎聘城市码</button></span></label>
+        <label class="label-row"><span>城市</span><span class="field-actions"><button class="linkbtn soft" onclick="syncCities()">同步 BOSS 城市库</button><button class="linkbtn soft" onclick="syncLpCities()">同步猎聘城市码</button></span></label>
         <div class="picker" id="cityPicker">
           <div class="box" id="cityBox" onclick="focusCity()">
             <div id="cityTags" style="display:flex;gap:8px;flex-wrap:wrap"></div>
@@ -838,11 +872,11 @@
           <div>
             <label>BOSS 每城获取页数 <span class="help" onclick="showPagesHelp()" title="页数多少比较安全">?</span></label>
             <input type="number" id="cfgPages" min="1" max="30" value="3">
-            <div class="muted" id="pagesHint" style="margin-top:6px"></div>
+            <div class="muted" id="pagesHint" style="margin-top:8px"></div>
           </div>
           <div>
             <label>职位描述</label>
-            <div class="muted" style="padding-top:10px;line-height:1.5">
+            <div class="field-note">
               获取轮只抓列表，描述统一走顶部「补抓描述」<br>可按当前筛选/勾选分批补，随时可停
             </div>
           </div>
@@ -866,11 +900,11 @@
         <div class="muted" style="margin-bottom:10px;line-height:1.6">
           技能不用手填：直接读你的 BOSS 在线简历，或上传简历文件自动解析。解析出的技能会用于计算每个岗位的匹配分。
         </div>
-        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+        <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center">
           <button class="btn btn-primary btn-sm" id="btnSyncResume" onclick="syncBossResume()">从 BOSS 同步简历</button>
           <button class="btn btn-sm" onclick="document.getElementById('resumeFile').click()">上传简历文件</button>
           <input type="file" id="resumeFile" accept=".pdf,.docx,.doc,.txt,.md" style="display:none" onchange="uploadResume(this)">
-          <span class="muted" id="resumeHint"></span>
+          <span class="muted" id="resumeHint" style="margin-left:6px"></span>
         </div>
         <div id="profBox" style="margin-top:14px"></div>
 
@@ -879,11 +913,11 @@
         <textarea id="cfgGreeting" rows="2" maxlength="200" placeholder="您好，我对贵司的岗位很感兴趣"></textarea>
         <div class="row3">
           <div><label>单批上限</label><input type="number" id="cfgApplyMax" min="1" max="50" value="20"></div>
-          <div><label>间隔下限 秒</label><input type="number" id="cfgApplyIMin" min="3" max="120" value="12"></div>
-          <div><label>间隔上限 秒</label><input type="number" id="cfgApplyIMax" min="3" max="300" value="30"></div>
+          <div><label>间隔下限（秒）</label><input type="number" id="cfgApplyIMin" min="3" max="120" value="12"></div>
+          <div><label>间隔上限（秒）</label><input type="number" id="cfgApplyIMax" min="3" max="300" value="30"></div>
         </div>
 
-        <div style="margin-top:24px;display:flex;gap:16px;align-items:center">
+        <div class="form-actions">
           <button class="btn btn-primary" onclick="saveConfig()">保存配置</button>
           <span class="tag tag-sal" id="cfgDirty" style="display:none">未保存</span>
           <span class="muted">点「立即获取」会自动保存当前配置</span>
@@ -1166,6 +1200,10 @@ function switchView(v){
     el.classList.toggle('brand-active',k===v&&k==='jobs');
     document.getElementById('view-'+k).style.display=(k===v)?'':'none';
   });
+  // 深色 hero 是岗位统计条（在招数/薪资未知/已投递…），只在岗位列表有意义。
+  // 原来切到配置/看板时它还挂着，页面顶上顶着一排与当前页无关的大数字，很割裂。
+  const hp=document.querySelector('.hero');
+  if(hp)hp.style.display=(v==='jobs')?'':'none';
   if(v==='dash')loadStats();
   if(v==='replies')loadReplies();
 }
@@ -1657,8 +1695,10 @@ function renderProfile(){
     return;
   }
   const core=new Set(PROF.core_skills||[]);
-  const chips=(PROF.skills||[]).map(s=>
-    `<span class="tag${core.has(s)?' tag-sal':''}" title="${core.has(s)?'核心技能':'技能'}">${esc(s)}</span>`).join(' ');
+  const allSkills=PROF.skills||[];
+  const coreList=allSkills.filter(s=>core.has(s));
+  const restList=allSkills.filter(s=>!core.has(s));
+  const chip=(s,hot)=>`<span class="tag${hot?' tag-sal':''}" title="${hot?'核心技能':'技能'}">${esc(s)}</span>`;
   const src=(PROF.source||'').startsWith('boss')?'BOSS 在线简历':(PROF.source||'').replace(/^upload:/,'上传：');
   box.innerHTML=`
     <div class="prof-meta">
@@ -1670,13 +1710,18 @@ function renderProfile(){
       <span>期望薪资 <b>${PROF.expect_salary||'?'}</b> K</span>
       <span>期望城市 <b>${esc((PROF.expect_cities||[]).join(' / ')||'—')}</b></span>
     </div>
-    <div class="prof-skills">${chips||'<span class="muted">未识别到技能</span>'}</div>
-    <div class="row2" style="margin-top:14px">
-      <div><label>期望月薪上限 K（可微调）</label><input type="number" id="profSalary" min="0" value="${PROF.expect_salary||0}"></div>
+    <div class="prof-skills">${
+      allSkills.length
+        ? (coreList.length?`<div class="prof-skillgroup"><div class="gl">核心技能<b>${coreList.length}</b></div><div class="tags">${coreList.map(s=>chip(s,true)).join('')}</div></div>`:'')
+          + (restList.length?`<div class="prof-skillgroup"><div class="gl">其他技能<b>${restList.length}</b></div><div class="tags">${restList.map(s=>chip(s,false)).join('')}</div></div>`:'')
+        : '<span class="muted">未识别到技能</span>'
+    }</div>
+    <div class="row2" style="margin-top:18px">
+      <div><label>期望月薪上限（K，可微调）</label><input type="number" id="profSalary" min="0" value="${PROF.expect_salary||0}"></div>
       <div><label>我的学历（可微调）</label>
         <select id="profDegree">${DEG_CHOICES.map(d=>`<option value="${d}" ${d===(PROF.degree||'')?'selected':''}>${d||'不设置'}</option>`).join('')}</select></div>
     </div>
-    <div style="margin-top:10px;display:flex;gap:10px;align-items:center">
+    <div style="margin-top:14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
       <button class="btn btn-sm" onclick="patchProfile()">保存微调并重算</button>
       <span class="muted">技能始终来自简历解析，不支持手填</span>
     </div>`;
