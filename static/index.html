@@ -214,6 +214,7 @@
   #cfgCard,#remoteCard{padding:32px 36px}
   /* 远程访问卡：一行状态 + 地址/口令两行；值用等宽字体，过长省略 */
   .rm-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .rm-actions{margin-left:auto;display:flex;gap:8px}
   .rm-state{font-size:13px;font-weight:700;color:var(--ink)}
   .rm-state.muted{color:var(--muted);font-weight:400}
   .rm-line{display:flex;align-items:center;gap:12px;margin-top:12px}
@@ -864,6 +865,10 @@
           <span class="dot" id="remoteDot"></span>
           <span class="rm-state muted" id="remoteState">未启动</span>
           <span class="muted" id="remoteProvider"></span>
+          <span class="rm-actions">
+            <button class="btn btn-primary btn-sm" id="btnTunStart" onclick="toggleTunnel('start')">启动隧道</button>
+            <button class="btn btn-sm" id="btnTunStop" onclick="toggleTunnel('stop')" style="display:none">停止隧道</button>
+          </span>
         </div>
         <div class="rm-line">
           <span class="k">公网地址</span>
@@ -1195,16 +1200,36 @@ function renderTunnel(){
   set('remoteState',on?'在线':'未启动','rm-state'+(on?'':' muted'));
   set('remoteProvider',on?((t.provider_label||'隧道')+(t.fixed?' · 地址固定':' · 地址会变')):'');
   set('remoteChecked',t.checked_at?('检查于 '+t.checked_at):'');
+  // 地址只在真正在线时显示：隧道断了还挂着上次的地址，只会误导（点进去就是 3200 离线）
   const u=document.getElementById('remoteUrl');
-  if(u){u.textContent=t.url||'—';u.className='v'+(t.url?'':' empty')}
+  const hasUrl=on&&!!t.url;
+  if(u){u.textContent=hasUrl?t.url:'—';u.className='v'+(hasUrl?'':' empty')}
   const k=document.getElementById('remoteKey');
   if(k){k.textContent=t.key||'未设置';k.className='v'+(t.key?'':' empty')}
+  // 按钮按状态切换，不给"双击 tunnel.bat"这类文字指引
+  const bs=document.getElementById('btnTunStart'),bp=document.getElementById('btnTunStop');
+  if(bs)bs.style.display=on?'none':'';
+  if(bp)bp.style.display=on?'':'none';
   const h=document.getElementById('remoteHint');
   if(!h)return;
-  if(on&&t.fixed)h.innerHTML='地址固定，重启隧道也不会变。手机浏览器打开后「添加到主屏幕」，用起来跟 App 一样。';
-  else if(on)h.innerHTML='<b>地址每次重启隧道都会变。</b>想固定：按 README 配一个 ngrok token（免费），之后一直是同一个地址。';
-  else if(t.stale)h.innerHTML='这个地址是上次的，隧道已经断开（关掉了 tunnel 窗口）。双击 <code>tunnel.bat</code> 重新开启。';
-  else h.innerHTML='隧道没开。本机 ' + esc(t.local_url||'http://127.0.0.1:8765') + ' 照常可用；要在外面用手机看，双击 <code>tunnel.bat</code>，它会打印公网地址和口令，之后这里也会显示。';
+  h.style.display=on?'':'none';
+  h.innerHTML=on?(t.fixed
+    ?'地址固定，重启隧道也不会变。手机浏览器打开后「添加到主屏幕」，用起来跟 App 一样。'
+    :'地址每次重启隧道都会变。想要固定地址：按 README 配一个 ngrok token（免费）。'):'';
+}
+async function toggleTunnel(action){
+  const start=action==='start';
+  const btn=document.getElementById(start?'btnTunStart':'btnTunStop');
+  const old=btn?btn.textContent:'';
+  if(btn){btn.disabled=true;btn.textContent=start?'启动中…':'停止中…'}
+  try{
+    const r=await(await fetch('/api/tunnel/'+action,{method:'POST'})).json();
+    toast(r.msg||(r.ok?'完成':'失败'));
+  }catch(e){
+    toast('请求失败，检查服务是否还在运行');
+  }
+  if(btn){btn.disabled=false;btn.textContent=old}
+  await loadTunnel();
 }
 function gotoRemote(){
   switchView('config');
