@@ -86,8 +86,25 @@ flowchart LR
 
 ```bash
 pip install -r requirements.txt
-python app.py                    # 或 Windows 双击 start.bat
 ```
+
+**日常启动（Windows 双击即可）**
+
+| 文件 | 作用 |
+|---|---|
+| `start.bat` | 后台启动，就绪后自动开浏览器；关掉这个窗口**不会**停服务 |
+| `stop.bat` | 停止服务（数据都在 `data\`，停服务不丢东西） |
+| `status.bat` | 看是否在跑、PID、地址、启用的平台、日志位置 |
+| `tunnel.bat` | 公网穿透（手机在外面看）；`--stop` 断开 |
+
+`start.bat` 也能当命令行用：`start.bat status` / `start.bat logs -f` / `start.bat restart`。
+
+为什么不再直接 `python app.py`：本机 PATH 里的 python 可能是 3.8 或缺依赖，双击会直接崩在 import 上。
+`serve.py` 会自己按「项目 `.venv` → 上次跑通的解释器 → PATH python → `py -3` → 已安装的 Python」
+逐个试到能跑的为止，结果记在 `data\python_exe.txt`，下次直接命中。日志统一写 `logs\server.log`
+（超过 5MB 自动轮转），`python serve.py logs -f` 可实时跟。
+
+其他系统（macOS/Linux）没有这套进程管理，直接前台跑：`python -m uvicorn app:app --port 8765`。
 
 打开 **http://127.0.0.1:8765**，首次使用按这个顺序：
 
@@ -208,9 +225,13 @@ boss-job-tracker/
 ├── push.py             # PushPlus 微信推送
 ├── e2e_test.py         # 端到端回归测试（离线，monkeypatch 模拟浏览器）
 ├── selftest.py         # 轻量自检
+├── serve.py            # 启动管理：找解释器 / 后台拉起 / 探活 / stop / status / logs
 ├── tunnel.py           # Cloudflare 快速隧道（手机外网访问，自动下载 cloudflared / 自动生成口令）
-├── start.bat           # Windows 一键启动
-├── tunnel.bat          # Windows 一键起隧道
+├── start.bat           # 双击：后台启动 + 自动开浏览器
+├── stop.bat            # 双击：停止服务
+├── status.bat          # 双击：查看运行状态
+├── tunnel.bat          # 双击：起内网穿透（start_tunnel.bat 是旧入口，已转调它）
+├── findpy.cmd          # bat 共用的解释器探测（纯 ASCII，cmd 按 ANSI 解析）
 ├── requirements.txt
 ├── static/
 │   ├── index.html      # 电脑版前端（表格 + 看板 + 地图，单文件）
