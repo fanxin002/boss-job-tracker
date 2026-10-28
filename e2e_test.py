@@ -1516,6 +1516,22 @@ def main():
     check("远程-手机端也显示隧道状态",
           'id="mTunnel"' in _mhtml and "/api/tunnel" in _mhtml)
 
+    # 页面一键启停（不再让用户去双击 bat、也不显示"上次的地址已断开"这类提示）
+    _appsrc = open(os.path.join(BASE, "app.py"), encoding="utf-8").read()
+    _tunsrc = open(os.path.join(BASE, "tunnel.py"), encoding="utf-8").read()
+    check("远程-一键启停接口",
+          '@app.post("/api/tunnel/start")' in _appsrc and '@app.post("/api/tunnel/stop")' in _appsrc)
+    check("远程-启动为后台常驻",
+          "DETACHED_PROCESS" in _appsrc and "logs\", \"tunnel.log" in _appsrc)
+    check("远程-页面有启动/停止按钮",
+          'id="btnTunStart"' in _html and 'id="btnTunStop"' in _html
+          and "function toggleTunnel(" in _html)
+    check("远程-离线时不显示过期地址", "hasUrl?t.url:'—'" in _html)
+    check("远程-不再用文字指引用户双击 bat", "双击 <code>tunnel.bat</code>" not in _html)
+    # ngrok 免费版不允许 agent 走 http 代理（ERR_NGROK_9009），启动前必须剥掉代理变量
+    check("隧道-启动前剥离代理变量",
+          "def clean_env(" in _tunsrc and "env=clean_env()" in _tunsrc)
+
     # ---- 汇总 ----
     passed = sum(1 for s, *_ in RESULTS if s == "PASS")
     failed = [n for s, n, d in RESULTS if s == "FAIL"]
