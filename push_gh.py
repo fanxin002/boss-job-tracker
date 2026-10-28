@@ -6,11 +6,13 @@ TOKEN = os.environ.get("GH_TOKEN", "")
 OWNER, REPO, BRANCH = "fanxin002", "boss-job-tracker", "main"
 API = f"https://api.github.com/repos/{OWNER}/{REPO}/contents"
 ROOT = os.path.dirname(os.path.abspath(__file__))
-FILES = ["static/index.html", "e2e_test.py", "push_gh.py"]
-MSG = ("style(config): unify the settings page - same 960px column for every card (was 860 main + "
-       "full-width tables), hide the job-stats hero outside the job list, section/label rhythm aligned, "
-       "soft secondary links instead of float+uppercase, rounded chips/opts, skills grouped into "
-       "core/others instead of alternating dark-light tags")
+FILES = ["serve.py", "start.bat", "stop.bat", "status.bat", "tunnel.bat",
+         "start_tunnel.bat", "findpy.cmd", "README.md", "e2e_test.py", ".gitignore", "push_gh.py"]
+MSG = ("feat(startup): unify launching behind serve.py - auto-picks a usable interpreter "
+       "(.venv -> cached -> PATH -> py -> installed), runs detached in background so closing "
+       "the window keeps the service alive, probes readiness via the listening PID, and adds "
+       "stop/status/logs commands; bat files stay pure ASCII (cmd parses .bat as ANSI) and "
+       "share findpy.cmd instead of hardcoding interpreter paths")
 
 # 隐私闸：推送前扫一遍要上传的文件，命中就拒绝推送（仓库是 public）
 # 2026-10-23 踩过的坑：e2e 的简历测试样本用了真实姓名+真实公司，从第一个 commit
