@@ -611,10 +611,16 @@ def api_tunnel_start():
         env["PYTHONUNBUFFERED"] = "1"
         env["PYTHONIOENCODING"] = "utf-8"
         flags = 0x00000008 | 0x08000000          # DETACHED_PROCESS | CREATE_NO_WINDOW
+        # 用 pythonw.exe（无控制台版）跑：只靠 DETACHED_PROCESS 在某些环境下
+        # 仍会闪一个 python 黑窗口并一直挂在前台，pythonw 从根上没有控制台。
+        pyexe = sys.executable
+        _pyw = _os.path.join(_os.path.dirname(pyexe), "pythonw.exe")
+        if _os.path.exists(_pyw):
+            pyexe = _pyw
         with open(_TUNNEL_LOG, "a", encoding="utf-8", errors="replace") as lf:
             lf.write("\n===== 启动隧道 %s =====\n" % datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
             lf.flush()
-            subprocess.Popen([sys.executable, _os.path.join(_TUNNEL_DIR, "tunnel.py")],
+            subprocess.Popen([pyexe, _os.path.join(_TUNNEL_DIR, "tunnel.py")],
                              cwd=_TUNNEL_DIR, stdin=subprocess.DEVNULL, stdout=lf,
                              stderr=subprocess.STDOUT, close_fds=True,
                              creationflags=flags, env=env)
