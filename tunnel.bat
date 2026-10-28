@@ -1,12 +1,33 @@
 @echo off
 chcp 65001 >nul
-rem 内网穿透：把本机看板开成公网 https 地址（手机在外面也能用）
-rem 地址固定要 ngrok：先跑一次  python tunnel.py --token 你的ngrok_token
-rem 前提：看板已经在跑（另开一个窗口 start.bat）
+setlocal
 cd /d "%~dp0"
+
+rem Public tunnel: expose the local dashboard over https (usable on phone).
+rem   tunnel.bat --token <ngrok_token>    one-time setup, then fixed URL
+rem   tunnel.bat --provider cf           zero-config Cloudflare (URL changes)
+rem   tunnel.bat --stop                   stop tunnel
+rem Requires the dashboard to be running (start.bat in another window).
+rem The tunnel is a foreground process: closing this window drops the tunnel,
+rem the local dashboard keeps running.
+rem Pure ASCII on purpose (see start.bat).
+
+call "%~dp0findpy.cmd"
+if not defined PY (
+  echo Python not found.
+  pause
+  exit /b 1
+)
+
+%PY% serve.py status
+if errorlevel 1 (
+  echo.
+  echo   [note] dashboard is NOT running - run start.bat first,
+  echo          otherwise the public URL will not load.
+  echo.
+)
+
+%PY% tunnel.py %*
 echo.
-echo === 内网穿透（地址固定用 ngrok，零配置用 Cloudflare 快速隧道） ===
-echo 关闭这个窗口 = 隧道断开（本机看板不受影响）
-echo.
-python tunnel.py %*
 pause
+endlocal
