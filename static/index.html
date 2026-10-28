@@ -211,7 +211,17 @@
   /* 整页同宽：原来主卡片 860、下面「获取历史/投递记录」两张表是全宽，
      切页时宽度来回跳，很割裂。统一交给外层容器约束，卡片自己不再写 max-width */
   #view-config{max-width:960px;margin:0 auto}
-  #cfgCard{padding:32px 36px}
+  #cfgCard,#remoteCard{padding:32px 36px}
+  /* 远程访问卡：一行状态 + 地址/口令两行；值用等宽字体，过长省略 */
+  .rm-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .rm-state{font-size:13px;font-weight:700;color:var(--ink)}
+  .rm-state.muted{color:var(--muted);font-weight:400}
+  .rm-line{display:flex;align-items:center;gap:12px;margin-top:12px}
+  .rm-line .k{flex:0 0 64px;font-size:12px;color:var(--muted)}
+  .rm-line .v{flex:1;min-width:0;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:13px;color:var(--ink);background:var(--surface-soft);border:1px solid var(--hairline);
+    border-radius:var(--r-xs);padding:7px 10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .rm-line .v.empty{color:var(--muted-soft);font-family:inherit;background:transparent;border-style:dashed}
   #view-config .card{margin-bottom:20px}
   /* section 节奏统一：上分隔大、下留小，紧接的表单不会贴到分隔线上 */
   #view-config .sect{margin:34px 0 6px;padding-bottom:10px}
@@ -586,6 +596,10 @@
         </span>
       </div>
       <span class="nav-status"><span class="dot" id="dotRun"></span><span id="runStatus">空闲</span></span>
+      <span class="nav-status" id="navRemote" onclick="gotoRemote()" style="cursor:pointer"
+            title="远程访问状态（内网穿透）。点一下查看公网地址和访问口令">
+        <span class="dot" id="dotRemote"></span><span id="remoteChip">远程 …</span>
+      </span>
       <span class="pchip" id="chipBrowser" onclick="showBrowserPick()"
             title="抓取用的浏览器。Chrome 和 Edge 都是 Chromium 内核，效果一样；点这里可以切换">
         <b id="browserLabel">浏览器</b><span id="browserState">…</span>
@@ -842,6 +856,28 @@
     </div>
 
     <div id="view-config" style="display:none">
+      <div class="card" id="remoteCard">
+        <h3>远程访问 <span class="right" style="display:flex;align-items:center;gap:14px">
+          <span id="remoteChecked"></span>
+          <button class="linkbtn soft" onclick="loadTunnel()">刷新</button></span></h3>
+        <div class="rm-row">
+          <span class="dot" id="remoteDot"></span>
+          <span class="rm-state muted" id="remoteState">未启动</span>
+          <span class="muted" id="remoteProvider"></span>
+        </div>
+        <div class="rm-line">
+          <span class="k">公网地址</span>
+          <span class="v empty" id="remoteUrl">—</span>
+          <button class="btn btn-sm" onclick="copyTunnel('url')">复制</button>
+        </div>
+        <div class="rm-line">
+          <span class="k">访问口令</span>
+          <span class="v empty" id="remoteKey">—</span>
+          <button class="btn btn-sm" onclick="copyTunnel('key')">复制</button>
+        </div>
+        <div class="muted" id="remoteHint" style="margin-top:12px;line-height:1.7"></div>
+      </div>
+
       <div class="card" id="cfgCard">
         <h3>获取配置</h3>
         <div class="sect">平台开关（点一次「立即获取」= 按顺序跑所有启用的平台）</div>
@@ -1141,6 +1177,58 @@ function uiDialog(opt){
     mask.classList.add('show');
     const f=mask.querySelector('[name]');if(f)f.focus();
   });
+}
+
+/* ========== 远程访问状态（内网穿透） ========== */
+let TUNNEL=null;
+async function loadTunnel(){
+  try{TUNNEL=await(await fetch('/api/tunnel')).json()}catch(e){return}
+  renderTunnel();
+}
+function renderTunnel(){
+  const t=TUNNEL||{},on=!!t.online;
+  const dotCls='dot'+(on?' ok':'');
+  const d=document.getElementById('dotRemote');if(d)d.className=dotCls;
+  const rd=document.getElementById('remoteDot');if(rd)rd.className=dotCls;
+  const set=(id,txt,cls)=>{const e=document.getElementById(id);if(!e)return;e.textContent=txt;if(cls!==undefined)e.className=cls};
+  set('remoteChip','远程 '+(on?'已开启':'未启动'));
+  set('remoteState',on?'在线':'未启动','rm-state'+(on?'':' muted'));
+  set('remoteProvider',on?((t.provider_label||'隧道')+(t.fixed?' · 地址固定':' · 地址会变')):'');
+  set('remoteChecked',t.checked_at?('检查于 '+t.checked_at):'');
+  const u=document.getElementById('remoteUrl');
+  if(u){u.textContent=t.url||'—';u.className='v'+(t.url?'':' empty')}
+  const k=document.getElementById('remoteKey');
+  if(k){k.textContent=t.key||'未设置';k.className='v'+(t.key?'':' empty')}
+  const h=document.getElementById('remoteHint');
+  if(!h)return;
+  if(on&&t.fixed)h.innerHTML='地址固定，重启隧道也不会变。手机浏览器打开后「添加到主屏幕」，用起来跟 App 一样。';
+  else if(on)h.innerHTML='<b>地址每次重启隧道都会变。</b>想固定：按 README 配一个 ngrok token（免费），之后一直是同一个地址。';
+  else if(t.stale)h.innerHTML='这个地址是上次的，隧道已经断开（关掉了 tunnel 窗口）。双击 <code>tunnel.bat</code> 重新开启。';
+  else h.innerHTML='隧道没开。本机 ' + esc(t.local_url||'http://127.0.0.1:8765') + ' 照常可用；要在外面用手机看，双击 <code>tunnel.bat</code>，它会打印公网地址和口令，之后这里也会显示。';
+}
+function gotoRemote(){
+  switchView('config');
+  setTimeout(()=>{const el=document.getElementById('remoteCard');if(el)el.scrollIntoView({behavior:'smooth',block:'center'})},60);
+}
+function copyTunnel(which){
+  const t=TUNNEL||{};
+  if(which==='key'&&t.key==='已设置'){toast('口令只在本机网页显示，请到电脑上查看');return}
+  const v=which==='url'?t.url:t.key;
+  if(!v||v==='—'){toast(which==='url'?'隧道还没开，没有公网地址':'还没有口令');return}
+  copyText(v,which==='url'?'公网地址已复制':'口令已复制');
+}
+function copyText(v,tip){
+  const done=()=>toast(tip||'已复制');
+  if(navigator.clipboard&&window.isSecureContext){
+    navigator.clipboard.writeText(v).then(done).catch(()=>fallbackCopy(v,done));
+  }else fallbackCopy(v,done);
+}
+function fallbackCopy(v,done){
+  const ta=document.createElement('textarea');
+  ta.value=v;ta.style.position='fixed';ta.style.top='-1000px';ta.style.opacity='0';
+  document.body.appendChild(ta);ta.select();
+  try{document.execCommand('copy');done()}catch(e){toast('复制失败，请手动选中复制')}
+  document.body.removeChild(ta);
 }
 
 /* ========== 抓取浏览器（Chrome / Edge 通用） ========== */
@@ -2795,6 +2883,9 @@ function bindMapSeg(){
   await safe(()=>getLoginState());
   await safe(()=>getLpLoginState());
   await safe(()=>loadBrowser());
+  await safe(()=>loadTunnel());
+  // 隧道可能中途开/关，定期刷新状态（接口只读本地文件 + 一次 tasklist，很轻）
+  setInterval(()=>{if(!document.hidden)safe(()=>loadTunnel())},30000);
   await safe(()=>refreshRisk());
   setInterval(refreshRisk,15000);
   document.getElementById('logClose').onclick=closeLog;
