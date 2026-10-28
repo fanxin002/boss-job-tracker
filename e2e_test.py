@@ -1492,6 +1492,30 @@ def main():
     check("启动-bat 共用解释器探测", 'call "%~dp0findpy.cmd"' in _startbat)
     check("忽略项-日志目录不入库", "logs/" in open(os.path.join(BASE, ".gitignore"), encoding="utf-8").read())
 
+    # ---- 远程访问状态（页面里直接看隧道开没开、地址、口令）----
+    import tunnel
+    _tl_r = client.get("/api/tunnel")
+    check("远程-接口可用", _tl_r.status_code == 200)
+    _tl = _tl_r.json()
+    check("远程-字段齐全",
+          all(k in _tl for k in ("online", "provider", "provider_label", "url", "fixed",
+                                 "stale", "key_set", "key", "is_local_request", "checked_at")))
+    check("远程-本机直连标记", _tl.get("is_local_request") is True)
+    check("远程-状态文件地址一致", _tl.get("url") == (open(tunnel.URL_FILE, encoding="utf-8").read().strip()
+                                                if os.path.exists(tunnel.URL_FILE) else ""))
+    # 在线 = 有地址且进程还在；只有地址文件不算（用户关掉隧道窗口后文件还在，地址已失效）
+    check("远程-地址在但进程不在就算离线",
+          _tl.get("online") is False or _tl.get("pid") is not None)
+    check("远程-过期地址有标记", isinstance(_tl.get("stale"), bool))
+    check("远程-前端有远程卡片",
+          'id="remoteCard"' in _html and 'id="remoteUrl"' in _html and 'id="remoteKey"' in _html)
+    check("远程-前端状态加载与复制", "function loadTunnel(" in _html
+          and "function copyTunnel(" in _html and "safe(()=>loadTunnel())" in _html)
+    check("远程-顶栏有入口", 'id="navRemote"' in _html and "function gotoRemote(" in _html)
+    _mhtml = open(os.path.join(BASE, "static", "m.html"), encoding="utf-8").read()
+    check("远程-手机端也显示隧道状态",
+          'id="mTunnel"' in _mhtml and "/api/tunnel" in _mhtml)
+
     # ---- 汇总 ----
     passed = sum(1 for s, *_ in RESULTS if s == "PASS")
     failed = [n for s, n, d in RESULTS if s == "FAIL"]
