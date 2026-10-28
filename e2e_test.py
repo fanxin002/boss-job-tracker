@@ -1460,6 +1460,38 @@ def main():
     check("视图-深色 hero 只在岗位列表显示",
           "hp.style.display=(v==='jobs')" in _html and "querySelector('.hero')" in _html)
 
+    # ---- 启动方式（serve.py 统一入口，2026-10-28）----
+    _serve_p = os.path.join(BASE, "serve.py")
+    check("启动-serve.py 存在", os.path.exists(_serve_p))
+    _srv = open(_serve_p, encoding="utf-8").read() if os.path.exists(_serve_p) else ""
+    check("启动-子命令齐全",
+          all(('"%s"' % k) in _srv for k in ("start", "stop", "restart", "status", "logs", "open")))
+    # 探测脚本必须先 import 再 exit：之前写成 exit 在前，import 永远执行不到，
+    # 结果任何 3.10+ 的解释器都被判成"依赖齐全"，启动必崩
+    _probe_i = _srv.find("_PROBE =")
+    _probe_seg = _srv[_probe_i:_probe_i + 300] if _probe_i >= 0 else ""
+    _imp = _probe_seg.find("import %s;")
+    _exi = _probe_seg.find("sys.exit(")
+    check("启动-解释器探测先 import 后判版本", _imp >= 0 and _exi > _imp)
+    check("启动-后台启动脱离控制台",
+          "DETACHED_PROCESS" in _srv and "CREATE_BREAKAWAY_FROM_JOB" in _srv)
+    check("启动-探活以监听 PID 为准（launcher 会派生）",
+          "real = find_listener()" in _srv and "real != proc.pid" not in _srv)
+    check("启动-日志轮转", "def rotate_log" in _srv and ".1.log" in _srv)
+
+    # bat 必须是纯 ASCII：cmd.exe 按 ANSI(GBK) 解析批处理文件，
+    # UTF-8 中文会被当成命令执行，报一堆"不是内部或外部命令"
+    for _batn in ("start.bat", "stop.bat", "status.bat", "tunnel.bat", "start_tunnel.bat", "findpy.cmd"):
+        _batp = os.path.join(BASE, _batn)
+        _raw = open(_batp, "rb").read() if os.path.exists(_batp) else None
+        check("启动-%s 存在且纯 ASCII" % _batn,
+              _raw is not None and all(b < 128 for b in _raw))
+    _startbat = open(os.path.join(BASE, "start.bat"), encoding="ascii", errors="ignore").read()
+    check("启动-双击 start.bat 默认执行 start",
+          "if \"%~1\"==\"\"" in _startbat and "serve.py start" in _startbat)
+    check("启动-bat 共用解释器探测", 'call "%~dp0findpy.cmd"' in _startbat)
+    check("忽略项-日志目录不入库", "logs/" in open(os.path.join(BASE, ".gitignore"), encoding="utf-8").read())
+
     # ---- 汇总 ----
     passed = sum(1 for s, *_ in RESULTS if s == "PASS")
     failed = [n for s, n, d in RESULTS if s == "FAIL"]
