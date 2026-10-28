@@ -1531,6 +1531,14 @@ def main():
     # ngrok 免费版不允许 agent 走 http 代理（ERR_NGROK_9009），启动前必须剥掉代理变量
     check("隧道-启动前剥离代理变量",
           "def clean_env(" in _tunsrc and "env=clean_env()" in _tunsrc)
+    # ngrok.exe / cloudflared.exe 是控制台程序，不压住就会弹黑窗口并一直挂在前台
+    check("隧道-子进程不弹控制台窗口",
+          "NO_WINDOW = 0x08000000" in _tunsrc and _tunsrc.count("creationflags=NO_WINDOW") >= 4)
+    check("隧道-单实例锁（防连点起两个 ngrok）",
+          "def acquire_lock(" in _tunsrc and "def release_lock(" in _tunsrc
+          and "LOCK_FILE" in _tunsrc)
+    check("远程-用 pythonw 启动隧道（无控制台）",
+          "pythonw.exe" in _appsrc and "pyexe = _pyw" in _appsrc)
 
     # ---- 汇总 ----
     passed = sum(1 for s, *_ in RESULTS if s == "PASS")
