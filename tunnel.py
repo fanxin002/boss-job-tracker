@@ -66,6 +66,25 @@ def _write(path, text):
         f.write(text)
 
 
+_PROXY_VARS = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy",
+               "all_proxy", "NO_PROXY", "no_proxy")
+
+
+def clean_env():
+    """剥掉 HTTP(S)_PROXY 再启动 ngrok。
+
+    免费版 ngrok 不允许 agent 走 http 代理，检测到就报
+    ERR_NGROK_9009「Running the agent with an http/s proxy is a Pay-as-you-go feature」
+    并直接退出 —— 表现就是「隧道起不来、公网地址 3200 离线」。
+    本地转发目标是 127.0.0.1，本来也不需要代理；终端里残留的全局代理
+    （Clash / 公司代理 / IDE 注入）才是最坑的来源，这里统一清掉。
+    """
+    env = dict(os.environ)
+    for k in _PROXY_VARS:
+        env.pop(k, None)
+    return env
+
+
 def ensure_key():
     k = _read(KEY_FILE)
     if k:
@@ -191,7 +210,8 @@ def run_ngrok(key):
         print("ℹ️  提示：这个地址是账号固定的，关掉窗口重跑也不会变。")
         return 0
 
-    subprocess.run([exe, "config", "add-authtoken", token], capture_output=True, timeout=60)
+    subprocess.run([exe, "config", "add-authtoken", token], capture_output=True,
+                   timeout=60, env=clean_env())
 
     domain = _read(NG_DOMAIN_FILE)
     cmd = [exe, "http", "8765", "--log", "stdout", "--log-format", "json"]
@@ -202,7 +222,7 @@ def run_ngrok(key):
     print("🚇 正在连接 ngrok…（地址固定，首次约 5-10 秒）")
     # 日志直接进文件：不再依赖解析 stdout（行内容不稳、也便于失败后排查）
     with open(log_path, "w", encoding="utf-8") as lf:
-        proc = subprocess.Popen(cmd, stdout=lf, stderr=subprocess.STDOUT)
+        proc = subprocess.Popen(cmd, stdout=lf, stderr=subprocess.STDOUT, env=clean_env())
     _write(PID_FILE, str(proc.pid))
 
     url = ""
@@ -220,8 +240,16 @@ def run_ngrok(key):
             while proc.poll() is None:      # 常驻，直到 Ctrl+C / 进程自己退出
                 time.sleep(2)
         else:
-            print("❌ ngrok 没起来。日志尾部：")
-            print(_tail(log_path))
+            tail_txt = _tail(log_path)
+            low = tail_txt.lower()
+            if "9009" in tail_txt or "proxy_url" in low or "http/s proxy" in low:
+                print("❌ ngrok 起不来：免费版不允许 agent 走 HTTP 代理（ERR_NGROK_9009）。")
+                print("   启动时已自动剥掉 HTTP(S)_PROXY，仍失败请检查：")
+                print("   1) ngrok 配置文件里是否有 proxy_url（%LOCALAPPDATA%\\ngrok\\ngrok.yml）")
+                print("   2) 换 Cloudflare 隧道：python tunnel.py --provider cf（地址会变）")
+            else:
+                print("❌ ngrok 没起来。日志尾部：")
+            print(tail_txt)
     except KeyboardInterrupt:
         print("\n⏹ 正在关闭隧道…")
     finally:
