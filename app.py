@@ -7,6 +7,7 @@ import os
 import re
 import secrets
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -579,6 +580,89 @@ def api_tunnel(request: Request):
         "is_local_request": local,
         "checked_at": datetime.now().strftime("%H:%M:%S"),
     }
+
+
+_TUNNEL_DIR = _os.path.dirname(_os.path.abspath(__file__))
+_TUNNEL_LOG = _os.path.join(_TUNNEL_DIR, "logs", "tunnel.log")
+_tunnel_starting = {"flag": False}
+
+
+@app.post("/api/tunnel/start")
+def api_tunnel_start():
+    """页面上一键起隧道（后台常驻，不占窗口，关窗口也不断）。
+
+    以前只能双击 tunnel.bat：那个窗口一关隧道就断，公网地址立刻变 3200 离线。
+    这里用 DETACHED_PROCESS 拉起，和 serve.py 起服务一个路子。
+    """
+    import tunnel as tun
+    try:
+        live = tun._ngrok_public_url(wait=0)
+    except Exception:
+        live = ""
+    if live:
+        return {"ok": True, "msg": "隧道已经在运行", "url": live}
+    if _tunnel_starting["flag"]:
+        return {"ok": False, "msg": "正在启动中，请等几秒再看"}
+
+    _tunnel_starting["flag"] = True
+    try:
+        _os.makedirs(_os.path.dirname(_TUNNEL_LOG), exist_ok=True)
+        env = tun.clean_env()      # 关键：剥掉 HTTP(S)_PROXY，否则 ngrok 直接报 ERR_NGROK_9009
+        env["PYTHONUNBUFFERED"] = "1"
+        env["PYTHONIOENCODING"] = "utf-8"
+        flags = 0x00000008 | 0x08000000          # DETACHED_PROCESS | CREATE_NO_WINDOW
+        with open(_TUNNEL_LOG, "a", encoding="utf-8", errors="replace") as lf:
+            lf.write("\n===== 启动隧道 %s =====\n" % datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            lf.flush()
+            subprocess.Popen([sys.executable, _os.path.join(_TUNNEL_DIR, "tunnel.py")],
+                             cwd=_TUNNEL_DIR, stdin=subprocess.DEVNULL, stdout=lf,
+                             stderr=subprocess.STDOUT, close_fds=True,
+                             creationflags=flags, env=env)
+        deadline = time.time() + 40
+        url = ""
+        while time.time() < deadline:
+            try:
+                url = tun._ngrok_public_url(wait=1)
+            except Exception:
+                url = ""
+            if url:
+                break
+        if url:
+            return {"ok": True, "msg": "隧道已启动", "url": url}
+
+        tail = ""
+        try:
+            with open(_TUNNEL_LOG, encoding="utf-8", errors="ignore") as f:
+                tail = f.read()[-500:]
+        except OSError:
+            pass
+        low = tail.lower()
+        if "9009" in tail or "proxy_url" in low or "http/s proxy" in low:
+            return {"ok": False, "msg": "ngrok 免费版不能走 HTTP 代理（ERR_NGROK_9009）："
+                                        "检查 %LOCALAPPDATA%\\ngrok\\ngrok.yml 里有没有 proxy_url，"
+                                        "或换 Cloudflare 隧道"}
+        return {"ok": False, "msg": "启动超时（40 秒没拿到地址），详见 logs/tunnel.log"}
+    finally:
+        _tunnel_starting["flag"] = False
+
+
+@app.post("/api/tunnel/stop")
+def api_tunnel_stop():
+    import tunnel as tun
+    pid = _read_text(tun.PID_FILE)
+    if not pid.isdigit():
+        return {"ok": False, "msg": "没记录到隧道进程；如果它还开着，去那个窗口按 Ctrl+C"}
+    ok = False
+    try:
+        r = subprocess.run(["taskkill", "/F", "/PID", pid], capture_output=True, timeout=15)
+        ok = r.returncode == 0
+    except Exception:
+        ok = False
+    try:
+        _os.remove(tun.PID_FILE)
+    except OSError:
+        pass
+    return {"ok": ok, "msg": "隧道已停止" if ok else "停止失败，进程可能已经退出了"}
 
 
 def _next_run_str():
