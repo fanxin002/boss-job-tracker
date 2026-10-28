@@ -42,3 +42,8 @@ Thumbs.db
 # git 操作临时输出
 _gitstage.txt
 _noproxy-test.txt
+
+# 后台运行的日志（serve.py 写这里）
+logs/
+_bat*.txt
+
