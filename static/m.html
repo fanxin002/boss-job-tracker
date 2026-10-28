@@ -331,6 +331,7 @@
     <div class="list">
       <div class="li" onclick="location.href='/?desktop=1'"><span>切到电脑版</span><span class="r">›</span></div>
       <div class="li"><span>当前访问地址</span><span class="r" id="mHost">—</span></div>
+      <div class="li"><span>远程隧道</span><span class="r" id="mTunnel">—</span></div>
     </div>
     <div class="hint">页面版本 <span id="buildStamp">—</span></div>
   </section>
@@ -749,10 +750,11 @@ async function loadDash(){
 /* ================= 我的 ================= */
 async function loadMe(){
   try{
-    const [b,l,c]=await Promise.all([
+    const [b,l,c,t]=await Promise.all([
       jget('/api/login_state?platform=boss'),
       jget('/api/login_state?platform=liepin'),
-      jget('/api/counts')
+      jget('/api/counts'),
+      jget('/api/tunnel')
     ]);
     $('#bossState').innerHTML=b.logged?'<span class="ok">● 已登录</span>':'<span class="no">● 未登录</span>';
     $('#lpState').innerHTML=l.logged?'<span class="ok">● 已登录</span>':'<span class="no">● 未登录</span>';
@@ -761,6 +763,10 @@ async function loadMe(){
     $('#mApplied').textContent=(c.applied||0)+' / '+(c.replied||0);
     $('#mStage').textContent=(c.interview||0)+' / '+(c.offer||0);
     $('#mHost').textContent=location.host;
+    const mt=$('#mTunnel');
+    if(mt)mt.innerHTML=t.online
+      ? '<span class="ok">● 已开启'+(t.fixed?'·固定':'')+'</span>'
+      : '<span class="no">● 未开启</span>';
   }catch(e){
     $('#bossState').textContent='读取失败';
   }
