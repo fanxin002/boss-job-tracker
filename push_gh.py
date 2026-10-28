@@ -6,11 +6,11 @@ TOKEN = os.environ.get("GH_TOKEN", "")
 OWNER, REPO, BRANCH = "fanxin002", "boss-job-tracker", "main"
 API = f"https://api.github.com/repos/{OWNER}/{REPO}/contents"
 ROOT = os.path.dirname(os.path.abspath(__file__))
-FILES = ["app.py", "static/index.html", "static/m.html", "e2e_test.py", "push_gh.py"]
-MSG = ("feat(remote): surface tunnel state in the UI - new /api/tunnel reads ngrok's local API + pid/url "
-       "files, a 远程访问 card on the settings page shows online state, public URL, key and whether the "
-       "domain is fixed, with copy buttons and a top-bar indicator; mobile 我的 shows tunnel state too; "
-       "key is only returned in plaintext for loopback requests")
+FILES = ["app.py", "tunnel.py", "static/index.html", "e2e_test.py", "push_gh.py"]
+MSG = ("feat(remote): start/stop the tunnel from the page - POST /api/tunnel/start launches it detached "
+       "with HTTP(S)_PROXY stripped (ngrok free rejects proxied agents: ERR_NGROK_9009), POST "
+       "/api/tunnel/stop kills it; the card now shows a 启动隧道 button when offline instead of an "
+       "expired-address warning, and only renders the URL while the tunnel is actually up")
 
 # 隐私闸：推送前扫一遍要上传的文件，命中就拒绝推送（仓库是 public）
 # 2026-10-23 踩过的坑：e2e 的简历测试样本用了真实姓名+真实公司，从第一个 commit
