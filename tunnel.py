@@ -39,6 +39,7 @@ NG_BIN = os.path.join(BIN_DIR, "ngrok.exe")
 DATA = os.path.join(BASE, "data")
 URL_FILE = os.path.join(DATA, "tunnel_url.txt")
 PID_FILE = os.path.join(DATA, "tunnel_pid.txt")
+LOCK_FILE = os.path.join(DATA, "tunnel.lock")
 KEY_FILE = os.path.join(DATA, "access_key.txt")
 CF_TOKEN_FILE = os.path.join(DATA, "cloudflared_token.txt")
 CF_HOST_FILE = os.path.join(DATA, "tunnel_host.txt")
@@ -69,6 +70,12 @@ def _write(path, text):
 _PROXY_VARS = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy",
                "all_proxy", "NO_PROXY", "no_proxy")
 
+# Windows：所有子进程都不要弹控制台窗口。
+# 从页面按钮启动隧道时，父进程是被 DETACHED 拉起的 python（本来没有控制台），
+# 而 ngrok.exe / cloudflared.exe 是控制台程序，被 Popen 时会自己 AllocConsole
+# 弹一个黑窗口，还一直挂在前台抢焦点 —— 必须显式压住。
+NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+
 
 def clean_env():
     """剥掉 HTTP(S)_PROXY 再启动 ngrok。
@@ -83,6 +90,51 @@ def clean_env():
     for k in _PROXY_VARS:
         env.pop(k, None)
     return env
+
+
+def _pid_alive(pid):
+    try:
+        out = subprocess.run(["tasklist", "/FI", "PID eq %d" % int(pid)],
+                             capture_output=True, text=True, errors="ignore",
+                             timeout=10, creationflags=NO_WINDOW).stdout
+        return str(pid) in out
+    except Exception:
+        return False
+
+
+def acquire_lock():
+    """单实例锁：两个 tunnel.py 同时跑会抢 4040，各自拉一个 ngrok，
+    后起的那个卡住不退 —— 从页面连点「启动隧道」就能复现。
+    用 O_EXCL 原子创建，陈旧锁（pid 已死）自动接管。"""
+    for _ in range(2):
+        try:
+            fd = os.open(LOCK_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, str(os.getpid()).encode())
+            os.close(fd)
+            return True, os.getpid()
+        except FileExistsError:
+            pid = 0
+            try:
+                pid = int(_read(LOCK_FILE).strip() or 0)
+            except Exception:
+                pid = 0
+            if pid and pid != os.getpid() and _pid_alive(pid):
+                return False, pid
+            try:
+                os.remove(LOCK_FILE)
+            except OSError:
+                pass
+        except OSError:
+            return True, os.getpid()      # 连锁文件都建不了就别挡着用户
+    return True, os.getpid()
+
+
+def release_lock():
+    try:
+        if _read(LOCK_FILE).strip() == str(os.getpid()):
+            os.remove(LOCK_FILE)
+    except OSError:
+        pass
 
 
 def ensure_key():
@@ -106,7 +158,8 @@ def curl_download(url, dst, timeout=600):
     """用系统 curl 下载：urllib 拿 GitHub/release 会得到半截文件（实测 21MB/55MB）"""
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     r = subprocess.run(["curl.exe", "-L", "--fail", "--retry", "2", "-o", dst, url],
-                       capture_output=True, text=True, timeout=timeout)
+                       capture_output=True, text=True, timeout=timeout,
+                       creationflags=NO_WINDOW)
     return r.returncode == 0
 
 
@@ -211,7 +264,7 @@ def run_ngrok(key):
         return 0
 
     subprocess.run([exe, "config", "add-authtoken", token], capture_output=True,
-                   timeout=60, env=clean_env())
+                   timeout=60, env=clean_env(), creationflags=NO_WINDOW)
 
     domain = _read(NG_DOMAIN_FILE)
     cmd = [exe, "http", "8765", "--log", "stdout", "--log-format", "json"]
@@ -222,7 +275,8 @@ def run_ngrok(key):
     print("🚇 正在连接 ngrok…（地址固定，首次约 5-10 秒）")
     # 日志直接进文件：不再依赖解析 stdout（行内容不稳、也便于失败后排查）
     with open(log_path, "w", encoding="utf-8") as lf:
-        proc = subprocess.Popen(cmd, stdout=lf, stderr=subprocess.STDOUT, env=clean_env())
+        proc = subprocess.Popen(cmd, stdout=lf, stderr=subprocess.STDOUT, env=clean_env(),
+                                creationflags=NO_WINDOW)
     _write(PID_FILE, str(proc.pid))
 
     url = ""
@@ -298,7 +352,8 @@ def run_cloudflare(key):
         print("🚇 正在建立 Cloudflare 快速隧道…（地址会变）")
 
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                            text=True, encoding="utf-8", errors="ignore", bufsize=1)
+                            text=True, encoding="utf-8", errors="ignore", bufsize=1,
+                            creationflags=NO_WINDOW, env=clean_env())
     _write(PID_FILE, str(proc.pid))
 
     url, shown = "", False
@@ -406,12 +461,23 @@ def main():
         return 1
     key = ensure_key()
     prov = pick_provider(argv)
-    if prov in ("ngrok", "ng"):
-        return run_ngrok(key)
-    if prov in ("cf", "cloudflare", "cf-quick", "cf-named"):
-        return run_cloudflare(key)
-    print(f"未知通道：{prov}（可用：ngrok / cf）")
-    return 1
+
+    ok, pid = acquire_lock()
+    if not ok:
+        print(f"ℹ️  已有隧道进程在跑（PID {pid}），不重复启动。")
+        old = _read(URL_FILE)
+        if old:
+            print(f"   地址：{old}")
+        return 0
+    try:
+        if prov in ("ngrok", "ng"):
+            return run_ngrok(key)
+        if prov in ("cf", "cloudflare", "cf-quick", "cf-named"):
+            return run_cloudflare(key)
+        print(f"未知通道：{prov}（可用：ngrok / cf）")
+        return 1
+    finally:
+        release_lock()
 
 
 if __name__ == "__main__":
