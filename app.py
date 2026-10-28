@@ -6,6 +6,7 @@ import json
 import os
 import re
 import secrets
+import subprocess
 import threading
 import time
 import uuid
@@ -490,6 +491,94 @@ def api_browser_set(body: BrowserIn):
     except Exception:
         pass
     return {"ok": True, "msg": f"已切到 {label}" + ("（自动选择 Chrome 优先）" if pref == "auto" else "")}
+
+
+# ---------- 远程访问（内网穿透）状态 ----------
+# 页面里要能看到「隧道开没开、公网地址是多少、口令是什么」，
+# 不用再去翻 tunnel.py 的窗口输出。
+def _read_text(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def _pid_running(pid):
+    if not pid or not str(pid).isdigit():
+        return False
+    try:
+        out = subprocess.run(["tasklist", "/FI", "PID eq %s" % pid],
+                             capture_output=True, text=True, errors="ignore",
+                             timeout=8).stdout
+        return str(pid) in out
+    except Exception:
+        return False
+
+
+def _req_is_local(request):
+    """本机直连判据，与 _access_gate 保持同一口径：
+    只看来源 IP 会被隧道流量骗过去（ngrok/cloudflared 都从本机转发），必须同时看 Host 头。"""
+    host = (request.client.host if request.client else "") or ""
+    if host == "testclient":     # e2e 的虚拟来源
+        return True
+    host_hdr = (request.headers.get("host") or "").split(":")[0].strip().lower().strip("[]")
+    via_proxy = bool(request.headers.get("cf-connecting-ip") or request.headers.get("cf-ray")
+                     or request.headers.get("x-forwarded-for") or request.headers.get("ngrok-trace-id"))
+    return (host in ("127.0.0.1", "::1", "localhost") and not via_proxy
+            and host_hdr in ("127.0.0.1", "localhost", "::1"))
+
+
+@app.get("/api/tunnel")
+def api_tunnel(request: Request):
+    """远程访问状态：隧道在不在跑、公网地址、口令、是否固定域名。
+    只读现有线索，不启动/停止任何进程。"""
+    import tunnel as tun
+
+    url = _read_text(tun.URL_FILE)
+    try:
+        live = tun._ngrok_public_url(wait=0)   # ngrok 在跑时 4040 API 是最新最准的信号
+    except Exception:
+        live = ""
+    if live:
+        url = live
+
+    pid = _read_text(tun.PID_FILE)
+    pid_alive = _pid_running(pid)
+
+    if live or "ngrok" in url:
+        provider = "ngrok"
+    elif "cloudflare" in url or "trycloudflare" in url:
+        provider = "cloudflare"
+    else:
+        provider = _read_text(tun.PROVIDER_FILE).lower()
+    # 「地址是否固定」：ngrok 只要配了 authtoken，给的域名就是账号专属的，重开隧道不变；
+    # cloudflared 只有具名隧道才固定，快速隧道每次随机。
+    # （以前只看 ngrok_domain.txt，但那个文件从没被写过，导致固定域名被误标成"会变"）
+    fixed = bool((provider == "ngrok" and _read_text(tun.NG_TOKEN_FILE))
+                 or (provider == "cloudflare" and _read_text(tun.CF_HOST_FILE)))
+
+    # 「在线」要同时满足：有地址 + 进程还在。
+    # 只看到地址文件是不够的：用户关掉隧道窗口后文件还在，地址已经失效了。
+    online = bool(live) or bool(url and pid_alive)
+
+    key = _access_key()
+    local = _req_is_local(request)
+    return {
+        "local_url": "http://127.0.0.1:8765",
+        "online": online,
+        "provider": provider,
+        "provider_label": {"ngrok": "ngrok", "cloudflare": "Cloudflare"}.get(provider, "隧道"),
+        "url": url,
+        "stale": bool(url and not online),   # 地址是上次的，隧道已断
+        "fixed": fixed,
+        "pid": int(pid) if pid.isdigit() else None,
+        "key_set": bool(key),
+        # 口令只在本机直连时明文返回；走隧道访问的人已经在门禁内，没必要再暴露一次
+        "key": key if local else ("已设置" if key else ""),
+        "is_local_request": local,
+        "checked_at": datetime.now().strftime("%H:%M:%S"),
+    }
 
 
 def _next_run_str():
