@@ -25,6 +25,7 @@ import db
 SOURCE = "liepin"
 PROFILE_DIR = os.path.join(db.DATA_DIR, "chrome_profile_liepin")
 STATE_FILE = os.path.join(db.DATA_DIR, "liepin_login_state.json")
+COOKIE_FILE = os.path.join(db.DATA_DIR, "liepin_cookies.json")
 LOGIN_URL = "https://www.liepin.com/user/login/"
 HOME_URL = "https://www.liepin.com/"
 
@@ -32,14 +33,32 @@ PAGE_DELAY = (5, 11)          # 接口调用间隔（秒）
 DAILY_QUOTA = 60              # 每日搜索请求预算（一次翻页 = 1 次）
 MAX_PAGES_CAP = 10            # 猎聘接口硬上限 400 条/组合
 
-# BOSS 配置里的中文城市名 → 猎聘 dqCode。
-# 带 * 的是公开资料/探针实测验证过的；未知城市会跳过并在日志提示补码。
-CITY_CODE = {
+# 兜底城市码（同步失败/首次使用前的本地内置表）。完整城市码由 sync_cities()
+# 从猎聘 get-all-dq 接口拉取落盘 data/liepin_cities.json，与 BOSS 的 cities.json 对等。
+_CITY_FALLBACK = {
     "厦门": "090040", "泉州": "090030", "福州": "090020",   # 探针实测 dqCode
     "北京": "010", "上海": "020", "天津": "030",
     "广州": "050020", "深圳": "050090", "南京": "060020", "杭州": "070020",
     "合肥": "080020", "成都": "280020",
 }
+CITY_FILE = os.path.join(db.DATA_DIR, "liepin_cities.json")
+
+
+def _load_city_code():
+    """城市码表：优先读本地缓存（同步过就用它），否则退回内置兜底表。"""
+    try:
+        with open(CITY_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        m = data.get("map") or {}
+        if m:
+            return m
+    except Exception:
+        pass
+    return dict(_CITY_FALLBACK)
+
+
+# 模块级城市码表（每次调用 run_crawl 前由 _load_city_code 刷新，见 run_crawl 开头）
+CITY_CODE = _load_city_code()
 
 # 页面上下文里调搜索接口（POST + JSON body，同源自动携带 WAF cookie）。
 # 必需请求头（实测缺失时 flag!=1 被拦）：X-Client-Type / X-Fscp-Version /
@@ -72,6 +91,84 @@ def build_body(kw, dq, page_no):
         "passThroughForm": {"scene": "init", "skeyword": kw, "sfrom": "search_job_pc"}}}
 
 
+# 猎聘全量城市码接口（antd-city 组件同款）：part_1 = 地级市/直辖市（搜索用），
+# part_2 = 区县，province = 省级，country = 国外。与 BOSS 的 city.json 对等。
+GET_DQ_URL = ("https://api-dok.liepin.com/api/com.liepin.bd.p.v4.get-all-dq"
+              "?part=part_1,part_2,country,province&sc=0&from=component")
+GET_DQ_JS = r"""
+var url=arguments[0];
+return fetch(url,{method:'GET',credentials:'include',
+  headers:{'X-Requested-With':'XMLHttpRequest','X-Client-Type':'web',
+    'X-Fscp-Version':'1.1','X-Fscp-Std-Info':JSON.stringify({client_id:'40108'}),
+    'X-Fscp-Trace-Id':'w'+Date.now()+Math.floor(Math.random()*1e6),
+    'Referer':'https://www.liepin.com/zhaopin/'}
+}).then(function(r){return r.text();}).catch(function(e){return 'FETCHERR '+e;});
+"""
+
+
+def sync_cities():
+    """从猎聘 get-all-dq 拉全量城市码落盘 data/liepin_cities.json。
+    返回 (ok, 城市数/错误信息)。与 BOSS crawler.sync_cities() 对等。"""
+    page = None
+    try:
+        page = _ensure_liepin_browser(offscreen=True)
+        page.get("https://www.liepin.com/zhaopin/")
+        time.sleep(6)
+        txt = page.run_js(GET_DQ_JS, GET_DQ_URL)
+        if not txt or str(txt).startswith("FETCHERR"):
+            return False, f"接口请求失败：{(txt or '')[:80]}"
+        body = json.loads(txt)
+        if body.get("flag") != 1:
+            return False, f"接口返回 flag={body.get('flag')} code={body.get('code')} {body.get('msg') or ''}"
+        data = body.get("data") or {}
+        part1 = (data.get("part_1") or {}).get("list") or {}
+        # 只取中国城市：a=="0"（中国）。层级过滤：
+        #   ca==3 → 地级市/自治州/地区（搜索城市码，厦门/泉州/福州…）
+        #   ca==2 且 l==3 → 直辖市（北京/上海/天津/重庆）
+        #   ca==2 其余（l==4/5 省级）→ 排除，省名不是搜索城市码
+        city_map = {}
+        for code, obj in part1.items():
+            if str(obj.get("a")) != "0":
+                continue
+            name = (obj.get("n") or "").strip()
+            if not name or not code:
+                continue
+            ca = int(obj.get("ca") or 0)
+            lv = obj.get("l")
+            if ca == 3:
+                city_map[name] = code
+            elif ca == 2 and str(lv) == "3":
+                city_map[name] = code
+        payload = {
+            "synced_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "count": len(city_map),
+            "map": city_map,
+        }
+        with open(CITY_FILE, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
+        global CITY_CODE
+        CITY_CODE = city_map
+        return True, len(city_map)
+    except Exception as e:
+        return False, str(e)
+    finally:
+        if page is not None:
+            try:
+                crawler._close_browser(slot="liepin")
+            except Exception:
+                pass
+
+
+def load_cities():
+    """读本地城市码缓存；没有则返回内置兜底表"""
+    try:
+        with open(CITY_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        return data.get("map") or {}, data.get("synced_at") or ""
+    except Exception:
+        return dict(_CITY_FALLBACK), ""
+
+
 def cookies_logged(page) -> bool:
     """猎聘登录判据：cookie 含 lt_auth"""
     try:
@@ -82,19 +179,93 @@ def cookies_logged(page) -> bool:
         return False
 
 
-def set_login_state(ok, note=""):
+def save_cookies(page):
+    """登录成功后把 cookie 落盘（合并写，同 BOSS 的教训：别用游客态覆盖掉登录凭据）。
+
+    为什么需要这份文件：光靠状态文件说「已登录」是假象 —— 猎聘会话过期后状态文件不会自己变，
+    界面就一直显示已登录，点岗位却被跳到登录/中转页（2026-10-26 实测：profile 里 16 个 cookie
+    但没有 lt_auth，状态文件却说「手动登录」）。有 cookie 文件才能像 BOSS 那样交叉校验。
+    """
     import json as _json
+    import tempfile
+    try:
+        new = crawler._cookie_list(page)
+    except Exception:
+        return False
+    old = []
+    try:
+        with open(COOKIE_FILE, encoding="utf-8") as f:
+            old = _json.load(f) or []
+    except Exception:
+        old = []
+
+    def _key(c):
+        name = c.get("name") if isinstance(c, dict) else getattr(c, "name", None)
+        dom = c.get("domain") if isinstance(c, dict) else ""
+        return (str(name), str(dom))
+
+    merged = {_key(c): c for c in old}
+    for c in new:
+        merged[_key(c)] = c
+    # 登录凭据保护：新列表没有 lt_auth 时保留旧的（游客态保存不能擦掉登录态）
+    if not any(_key(c)[0] == "lt_auth" for c in new):
+        keep = [c for c in old if _key(c)[0] == "lt_auth"]
+        for c in keep:
+            merged.setdefault(_key(c), c)
+    try:
+        fd, tmp = tempfile.mkstemp(dir=db.DATA_DIR, suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            _json.dump(list(merged.values()), f, ensure_ascii=False)
+        os.replace(tmp, COOKIE_FILE)
+        return True
+    except Exception:
+        return False
+
+
+def cookies_have_login() -> bool:
+    """从落盘文件判断登录凭据是否存在（不启浏览器，接口调用成本为零）"""
+    import json as _json
+    try:
+        with open(COOKIE_FILE, encoding="utf-8") as f:
+            data = _json.load(f) or []
+        return any((c.get("name") if isinstance(c, dict) else None) == "lt_auth" for c in data)
+    except Exception:
+        return False
+
+
+def set_login_state(ok, note=""):
+    """原子写（同 crawler.set_login_state：避免进程被杀时留下空文件误显示未登录）"""
+    import json as _json
+    import tempfile
     from datetime import datetime
-    _json.dump({"logged": bool(ok), "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "note": note}, open(STATE_FILE, "w", encoding="utf-8"))
+    payload = {"logged": bool(ok), "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "note": note}
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(STATE_FILE), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            _json.dump(payload, f, ensure_ascii=False)
+        os.replace(tmp, STATE_FILE)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except Exception:
+            pass
+        raise
 
 
 def get_login_state():
     import json as _json
     try:
         st = _json.load(open(STATE_FILE, encoding="utf-8"))
+        if not isinstance(st, dict):
+            raise ValueError("not a dict")
     except Exception:
-        st = {"logged": False, "at": "", "note": ""}
+        st = {"logged": False, "at": "", "note": "状态文件损坏，点「猎聘」胶囊重新登录", "stale": True}
+    # 交叉校验（同 BOSS 的 wt2 教训）：状态文件说已登录，但落盘 cookie 里没有 lt_auth
+    # → 猎聘会话早就过期了，如实报未登录，别让界面继续显示「已登录」骗人。
+    if st.get("logged") and os.path.exists(COOKIE_FILE) and not cookies_have_login():
+        st["logged"] = False
+        st["stale"] = True
+        st["note"] = "状态文件记录已登录，但 cookie 里没有 lt_auth（会话已过期），请重新登录猎聘"
     th = _login.get("thread")
     st["login_open"] = bool(_login["running"] and th and th.is_alive())
     return st
@@ -131,6 +302,8 @@ def login_flow():
             except Exception:
                 pass
         set_login_state(ok, "手动登录" if ok else "未完成登录")
+        if ok:
+            save_cookies(page)      # 落盘才有得校验，否则状态文件永远是「一言堂」
     except Exception as e:
         set_login_state(False, f"登录窗口异常：{e}")
     finally:
@@ -164,6 +337,8 @@ def normalize(cards, kw, city_name, dq):
             continue
         seen.add(jid)
         salary_txt = (j.get("salary") or "").strip()
+        # 猎聘原始值是小写 k（如「130-180k」），BOSS 是「13-18K」，列表里两平台并排看会很别扭 → 统一大写
+        salary_txt = re.sub(r"(\d)\s*[kK]\b", r"\1K", salary_txt)
         refresh = str(j.get("refreshTime") or "")
         # 猎聘 dq 形如「厦门-翔安区」或只有「厦门」；剥掉城市前缀，避免列表显示「厦门 厦门-翔安区」
         area = (j.get("dq") or "").strip()
@@ -224,6 +399,10 @@ def run_crawl(run_id, keywords, cities, pages, headless=False, offscreen=True, p
     fetched = new_cnt = offline_cnt = 0
     tot = max(1, len(keywords) * len(cities) * max(1, int(pages or 1)))
     done = {"n": 0}
+
+    # 每次抓取前刷新城市码表（用户可能刚同步过猎聘城市库）
+    global CITY_CODE
+    CITY_CODE = _load_city_code()
 
     def _p(note=""):
         if not progress:
@@ -301,7 +480,8 @@ def run_crawl(run_id, keywords, cities, pages, headless=False, offscreen=True, p
                     fetched += len(batch)
                     new_cnt += n
                     if covered_ok:
-                        offline_cnt += db.mark_offline([(kw, dq)], ids, source=SOURCE)
+                        offline_cnt += db.mark_offline([(kw, dq)], ids, source=SOURCE,
+                                                       log=logf)
                     logf(f"  入库 {len(batch)} 条（新增 {n}）")
     except Exception as e:
         logf(f"❌ 猎聘获取异常：{e}")
@@ -361,6 +541,7 @@ def run_details(jobs, logf, interval=(3, 6), should_cancel=None, on_progress=Non
     """批量补抓猎聘详情（JD + 福利 + 区县）。返回 (ok, fail)。"""
     import random
     ok = fail = 0
+    blocked = 0                   # 被猎聘 302 到登录/中转页的次数
     if not jobs:
         return 0, 0
     page = _ensure_liepin_browser(headless=True, offscreen=True)
@@ -377,6 +558,19 @@ def run_details(jobs, logf, interval=(3, 6), should_cancel=None, on_progress=Non
             try:
                 page.get(url)
                 time.sleep(random.uniform(2.0, 3.2))
+                # 猎聘对未登录/被风控的请求，会 302 到 wow.liepin.com 的中转页（实测 2026-10-26，
+                # 换 UA / 带 Referer / 先访问首页取 cookie 都一样）。这种情况一定是拿不到 JD 的，
+                # 直接如实报「被拦截」并计数，别每一条都白跑还报成「页面结构变化」。
+                final_url = page.url or ""
+                if "wow.liepin.com" in final_url or "transit" in final_url:
+                    blocked += 1
+                    fail += 1
+                    logf(f"  [{i}/{total}] ⛔ 被猎聘拦截：详情页跳到中转页（未登录猎聘时必现）")
+                    if blocked >= 3 and ok == 0:
+                        logf("⛔ 连续 3 条都被跳转 —— 猎聘登录态已失效。"
+                             "先点顶部「猎聘」胶囊重新登录，再回来补抓描述；本轮已停止，避免白跑几百次")
+                        break
+                    continue
                 data = parse_detail(page.run_js(DETAIL_JS) or "")
                 if data.get("jd"):
                     area = data.get("area") or ""

@@ -154,10 +154,19 @@ def extract_expect(text):
         salary = max(salary, int(b))
     for one in re.findall(r"(\d{1,3})\s*[Kk千]", sec):
         salary = max(salary, int(one))
-    # 城市：用已同步城市库匹配
+    # 城市：用已同步城市库匹配（优先用户目录里同步出来的那份；打包版首次运行退回内置种子）
     try:
         import json
-        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "cities.json")
+        import db as _db
+        p = os.path.join(_db.DATA_DIR, "cities.json")
+        if not os.path.exists(p):
+            try:
+                import runtime_paths as _rp
+                seed = _rp.resource_path("data", "cities.json")
+                if os.path.exists(seed):
+                    p = seed
+            except Exception:
+                pass
         if os.path.exists(p):
             data = json.load(open(p, encoding="utf-8"))
             flat = data if isinstance(data, list) else data.get("cities", [])

@@ -45,6 +45,15 @@ def main():
     db.DB_PATH = test_db
     db.init_db()
 
+    # 猎聘的登录态文件/cookie 文件也指到测试目录：它们读的是真实 data/ 下的文件，
+    # 不隔离的话「真实 cookie 有没有 lt_auth」会左右测试结果（2026-10-26 加了交叉校验后暴露）
+    import liepin as _lp_boot
+    _lp_boot.STATE_FILE = os.path.join(BASE, "data", "test_lp_state.json")
+    _lp_boot.COOKIE_FILE = os.path.join(BASE, "data", "test_lp_cookies.json")
+    for _f in (_lp_boot.STATE_FILE, _lp_boot.COOKIE_FILE):
+        if os.path.exists(_f):
+            os.remove(_f)
+
     # ---- 1. 配置读写 ----
     db.set_config({"keywords": "数据分析,BI", "cities": '[{"name":"厦门","code":"101230200"}]',
                    "pages": "3", "daily_time": "08:15", "greeting": "您好，我对该岗位很感兴趣"})
@@ -93,8 +102,8 @@ def main():
     check("增量-旧岗位取消新增标记", rowA["is_new"] == 0)
     check("增量-旧岗位last_run更新", rowA["last_run_id"] == rid2)
 
-    # ---- 5. 下线检测 ----
-    off = db.mark_offline([("数据分析", "101230200")], set(ids2))
+    # ---- 5. 下线检测（min_miss=1：旧语义，单轮未出现即下线）----
+    off = db.mark_offline([("数据分析", "101230200")], set(ids2), min_miss=1)
     c = db.conn()
     rowC = c.execute("SELECT status FROM jobs WHERE job_id='C'").fetchone()
     rowD = c.execute("SELECT status,is_new FROM jobs WHERE job_id='D'").fetchone()
@@ -217,8 +226,11 @@ def main():
     # 伪造已登录：state 文件 + Cookie 文件都要（get_login_state 会交叉校验 wt2）
     st_path = appmod.crawler.STATE_FILE
     ck_path = appmod.crawler.COOKIE_FILE
-    old = open(st_path, encoding="utf-8").read() if os.path.exists(st_path) else None
-    old_ck = open(ck_path, encoding="utf-8").read() if os.path.exists(ck_path) else None
+    # 变量名必须独立：`old` 在下面第 12 节会被复用成调参元组，
+    # 之前用 `old` 保存原状态 → 末尾还原时拿到的是元组，写回失败被 except 吞掉，
+    # 结果测试自己的假状态（{"logged": true, "at": "t"}）留在了真实文件里
+    _st_orig = open(st_path, encoding="utf-8").read() if os.path.exists(st_path) else None
+    _ck_orig = open(ck_path, encoding="utf-8").read() if os.path.exists(ck_path) else None
     json.dump({"logged": False, "at": "", "note": ""}, open(st_path, "w", encoding="utf-8"))
     r = client.post("/api/apply", json={"job_ids": ["A"]})
     check("API-投递未登录拒绝", r.json()["ok"] is False and "未登录" in r.json()["msg"], r.json()["msg"])
@@ -239,6 +251,60 @@ def main():
     check("登录-有wt2即视为已登录",
           appmod.crawler.cookies_have_login() is True
           and appmod.crawler.get_login_state()["logged"] is True)
+    # ---- 登录老掉防护：save_cookies 合并语义 ----
+    class _FakePage:
+        def cookies(self):
+            # 模拟「游客态」：没有 wt2，只有反爬 cookie（repair 未登录分支的真实场景）
+            return [{"name": "__zp_stoken__", "value": "new", "domain": ".zhipin.com"},
+                    {"name": "ab_guid", "value": "g", "domain": "www.zhipin.com"}]
+    json.dump([{"name": "wt2", "value": "KEEPME", "domain": ".zhipin.com"},
+               {"name": "__zp_stoken__", "value": "old", "domain": ".zhipin.com"}],
+              open(ck_path, "w", encoding="utf-8"))
+    appmod.crawler.save_cookies(_FakePage())
+    _merged = {c["name"]: c["value"] for c in json.load(open(ck_path, encoding="utf-8"))}
+    check("登录掉线-游客态保存不擦除wt2", _merged.get("wt2") == "KEEPME"
+          and appmod.crawler.cookies_have_login() is True, str(_merged))
+    check("登录掉线-同名cookie用新值覆盖", _merged.get("__zp_stoken__") == "new", str(_merged))
+
+    # ---- 注入策略：不能拿文件里的旧 wt2 覆盖浏览器里更新的 wt2 ----
+    # 2026-10-26 用户反馈「每次都要登录」：旧逻辑无条件注入文件里的 wt2，
+    # 而 BOSS 的 JS 会在会话中刷新 wt2 → 一注入就把新鲜的冲掉，永远停在旧值。
+    class _JarPage:
+        def __init__(self, jar):
+            self.jar = list(jar)
+            self.set = type("S", (), {"cookies": lambda _s, cs: (
+                self.jar.__setitem__(slice(None), self.jar + list(cs)))})()
+        def get(self, *_a, **_k):
+            return None
+        def cookies(self):
+            return list(self.jar)
+
+    # A) 浏览器已有 wt2=FRESH，文件里是 OLD → 必须保留 FRESH
+    json.dump([{"name": "wt2", "value": "OLD", "domain": ".zhipin.com"}],
+              open(ck_path, "w", encoding="utf-8"))
+    _pg = _JarPage([{"name": "wt2", "value": "FRESH", "domain": ".zhipin.com"}])
+    _ok_inj = appmod.crawler.inject_cookies(_pg)
+    _vals = {c["name"]: c["value"] for c in _pg.jar}
+    check("注入-不覆盖浏览器里更新的wt2", _vals.get("wt2") == "FRESH" and _ok_inj is True, str(_vals))
+    # B) 浏览器没有 wt2（profile 被清），文件里有 → 补上
+    json.dump([{"name": "wt2", "value": "SAVED", "domain": ".zhipin.com"},
+               {"name": "__zp_stoken__", "value": "s", "domain": ".zhipin.com"}],
+              open(ck_path, "w", encoding="utf-8"))
+    _pg2 = _JarPage([])
+    _ok2 = appmod.crawler.inject_cookies(_pg2)
+    _vals2 = {c["name"]: c["value"] for c in _pg2.jar}
+    check("注入-浏览器缺wt2时从文件补", _vals2.get("wt2") == "SAVED" and _ok2 is True, str(_vals2))
+    # C) 两边都没有 → 必须如实返回 False（不装成功）
+    json.dump([{"name": "ab_guid", "value": "g", "domain": ".zhipin.com"}],
+              open(ck_path, "w", encoding="utf-8"))
+    check("注入-没登录凭据时返回False", appmod.crawler.inject_cookies(_JarPage([])) is False)
+    # 重新登录（新列表带同名 wt2）→ 正常覆盖为新值
+    class _FakePage2:
+        def cookies(self):
+            return [{"name": "wt2", "value": "FRESH", "domain": ".zhipin.com"}]
+    appmod.crawler.save_cookies(_FakePage2())
+    _merged2 = {c["name"]: c["value"] for c in json.load(open(ck_path, encoding="utf-8"))}
+    check("登录掉线-重新登录后wt2更新", _merged2.get("wt2") == "FRESH", str(_merged2))
     _st2 = client.get("/api/status").json()
     check("进度-status带progress字段",
           "progress" in _st2 and isinstance(_st2["progress"].get("pct"), int), str(_st2.get("progress")))
@@ -260,8 +326,8 @@ def main():
     r = client.post("/api/cancel_login")  # 无关接口仍工作
     r = client.post("/api/apply_cancel")
     check("API-取消投递", r.json()["ok"] is True, r.json()["msg"])
-    if old is not None:
-        open(st_path, "w", encoding="utf-8").write(old)
+    if _st_orig is not None:
+        open(st_path, "w", encoding="utf-8").write(_st_orig)
     # 等投递线程收尾
     for _ in range(40):
         if not client.get("/api/apply_status").json()["running"]:
@@ -279,6 +345,31 @@ def main():
           "found" if ("'=1+1" in text and "'-4+5" in text) else "missing")
     r = client.get("/api/applications?limit=5")
     check("API-投递记录接口", r.status_code == 200 and isinstance(r.json()["apps"], list))
+
+    # ---- 12b. 骨架屏加载反馈（静态结构 + 动效降级约束）----
+    _html_path = os.path.join(BASE, "static", "index.html")
+    _html = open(_html_path, encoding="utf-8").read()
+    check("骨架-四态容器齐全", all(k in _html for k in
+          ('id="jobSkeleton"', 'id="jobContent"', 'id="jobError"', 'id="jobRetry"')))
+    check("骨架-状态机函数存在", "function setJobState(" in _html and "function skRows(" in _html)
+    # 扫光必须用 transform（GPU 合成），不能用 background-position（会触发重绘）
+    _sk_css = _html[_html.find(".sk::after"):_html.find(".sk::after") + 420]
+    check("骨架-扫光用transform", "transform" in _sk_css and "background-position" not in _sk_css)
+    check("骨架-尊重减动效", "@media (prefers-reduced-motion: reduce)" in _html
+          and "animation:none" in _html)
+    check("骨架-过渡时长650ms", ".65s" in _html)
+    # 参考 Motion Lab 的质感要点：渐变两端完全透明（柔和波纹，不是硬白条）+ 明确状态文案
+    check("骨架-扫光渐变边缘柔化", "rgba(255,255,255,0) 36%" in _html)
+    check("骨架-有加载状态文案", 'id="jobSkStatus"' in _html and 'role="status"' in _html)
+    check("骨架-内容层带过渡类", 'id="jobContent" class="sk-swap"' in _html)
+    # ---- 12c. 形状一致性锁：全站一套圆角 token，控件不再直角 ----
+    check("设计-圆角 token 齐全", all(f"--r-{k}:" in _html for k in ("xs", "sm", "md", "lg", "full")))
+    check("设计-表单控件用圆角 token", "border-radius:var(--r-sm);background:var(--canvas)" in _html)
+    check("设计-已无直角控件", "border-radius:0" not in _html.replace("--r-xs:6px", ""))
+    check("设计-下拉自绘箭头", "appearance:none" in _html and "data:image/svg+xml" in _html)
+    check("设计-卡片有阴影层级", "--shadow-card" in _html and "border-radius:var(--r-md);box-shadow" in _html)
+    # 投递过即进 HR 回复页（waiting 口径）
+    check("回复-接口含waiting字段", "waiting" in client.get("/api/replies?limit=1").json())
 
     # ---- 13. 并发互斥：抓取运行中拒绝投递（反之同理） ----
     appmod._state["running"] = True
@@ -407,6 +498,11 @@ def main():
     importlib.reload(applymod)  # 还原被第11节 monkeypatch 的 run_apply
     check("投递-apply模块结构完整", hasattr(applymod, "run_apply") and hasattr(applymod, "apply_one")
           and hasattr(applymod, "_click_and_confirm"))
+    # BOSS 前端改版：按钮 class 是 btn-startchat（旧 btn-start-talk 已失效），
+    # 且必须用 a 标签选择器优先（父容器 div.btn-startchat-wrap 也含同样文字）
+    _sels = getattr(applymod, "_START_CHAT_SELECTORS", ())
+    check("投递-按钮选择器含新版class", any("btn-startchat" in s for s in _sels)
+          and _sels and _sels[0].startswith("x://a["), str(_sels[:2]))
 
     # 已投递岗位在批量中跳过（不产生新记录）
     db.upsert_jobs([mk("S2", "10K")], rid2)
@@ -421,12 +517,22 @@ def main():
     applymod.apply_one = fake_apply_one
     fake_page = object()
     real_ensure, real_inject, real_close = crawler.ensure_browser, crawler.inject_cookies, crawler._close_browser
+    real_probe = crawler.probe_api
     crawler.ensure_browser = lambda headless=False, offscreen=False: fake_page
     crawler.inject_cookies = lambda p: None
     crawler._close_browser = lambda: None
+    crawler.probe_api = lambda p, k, c: (0, "")   # 前置探测：默认放行
     try:
         ok, fail = applymod.run_apply(["S2"], "", lambda s: None, "batch_skip")
         check("投递-已投递岗位跳过", ok == 0 and fail == 0 and calls["n"] == 0, f"ok={ok} calls={calls['n']}")
+        # 登录态失效（接口 401）→ 整批不开始，不产生任何投递记录（2026-10-23 修复）
+        crawler.probe_api = lambda p, k, c: (401, "登录失效")
+        n_before_401 = len(db.get_applications())
+        calls["n"] = 0
+        ok, fail = applymod.run_apply(["S1"], "", lambda s: None, "batch_401", max_batch=5, interval=(0, 0))
+        check("投递-登录失效整批拒绝", ok == 0 and fail == 1 and calls["n"] == 0
+              and len(db.get_applications()) == n_before_401, f"ok={ok} fail={fail} calls={calls['n']}")
+        crawler.probe_api = lambda p, k, c: (0, "")
         ok, fail = applymod.run_apply(["S1"], "", lambda s: None, "batch_off")  # S1已下线但applied=0 → 会尝试
         # 下架岗位由页面检测返回，这里fake直接成功，只验证链路不断
         # 单批上限截取
@@ -438,6 +544,74 @@ def main():
     finally:
         applymod.apply_one = real_one
         crawler.ensure_browser, crawler.inject_cookies, crawler._close_browser = real_ensure, real_inject, real_close
+        crawler.probe_api = real_probe
+
+    # ---- 19b. _page_state 识别登录失效页（2026-10-23：wt2 过期被误报成岗位下架）----
+    class _FakeBody:
+        def __init__(self, t):
+            self.text = t
+
+    class _FakeTab:
+        def __init__(self, url="", text=""):
+            self.url = url
+            self._text = text
+
+        def ele(self, loc, timeout=0):
+            return _FakeBody(self._text) if loc == "tag:body" else None
+
+    _st_err_url = applymod._page_state(_FakeTab(
+        url="https://www.zhipin.com/web/passport/zp/error.html?code=7"))
+    check("投递-识别登录失效跳转页", str(_st_err_url).startswith("blocked")
+          and "登录" in str(_st_err_url), str(_st_err_url))
+    _st_err_txt = applymod._page_state(_FakeTab(
+        url="https://www.zhipin.com/job_detail/x.html", text="抱歉 当前登录状态已失效 返回首页"))
+    check("投递-识别登录失效正文", str(_st_err_txt).startswith("blocked"), str(_st_err_txt))
+    _st_ok = applymod._page_state(_FakeTab(url="https://www.zhipin.com/job_detail/x.html", text="数据分析师 15-20K"))
+    check("投递-正常页面不误判", _st_ok is None, str(_st_ok))
+
+    # ---- 19c. 重投失败：failed_apply_ids + 接口 + 冤下线修复 ----
+    # 自愈：状态文件可能被外部并发写坏（曾踩过），先写一份有效登录态再测
+    json.dump({"logged": True, "at": "t", "note": ""}, open(st_path, "w", encoding="utf-8"))
+    db.upsert_jobs([mk("RF1"), mk("RF2")], rid2)
+    db.set_applied(["RF1", "RF2"], 2)          # 标为投递失败
+    db.set_applied(["A"], 1)                    # A 是成功的，不应被重投
+    _fids = db.failed_apply_ids(source="boss", limit=50)
+    check("重投-只取失败岗位", set(_fids) >= {"RF1", "RF2"} and "A" not in _fids, str(_fids))
+    # patch 掉 _do_apply：避免测试真的起投递线程（会开真浏览器）
+    _real_do_apply = appmod._do_apply
+
+    def _fake_do_apply(ids, greeting):
+        with appmod._apply_lock:
+            appmod._apply_state["running"] = False   # 模拟 finally 复位
+    appmod._do_apply = _fake_do_apply
+    try:
+        r = client.post("/api/apply_retry")
+        check("重投-接口可用", r.status_code == 200 and r.json().get("ok") is True,
+              r.text[:80])
+        time.sleep(0.5)   # 等 fake 线程跑完复位
+        # 有投递在运行时再点应被拒（不重复起批）
+        with appmod._apply_lock:
+            appmod._apply_state["running"] = True
+        r2 = client.post("/api/apply_retry")
+        check("重投-运行中拒绝", r2.json()["ok"] is False, r2.json().get("msg", ""))
+        with appmod._apply_lock:
+            appmod._apply_state["running"] = False
+        # 无失败岗位时应给出明确提示（清掉全部失败态，含前面测试遗留的）
+        db.set_applied(db.failed_apply_ids(source="boss", limit=100), 0)
+        r3 = client.post("/api/apply_retry")
+        check("重投-无失败岗位时提示", r3.json()["ok"] is False and "没有投递失败" in r3.json()["msg"],
+              r3.json().get("msg", ""))
+        # 未登录时应直接拒绝（曾经的坑：没这道检查 → 起了批但 probe 401 秒退，
+        # 用户看不到投递发生，2026-10-23 实际踩过）
+        db.set_applied(["RF1"], 2)   # 造一条失败，让 ids 非空
+        json.dump({"logged": False, "at": "", "note": ""}, open(st_path, "w", encoding="utf-8"))
+        r4 = client.post("/api/apply_retry")
+        check("重投-未登录直接拒绝", r4.json()["ok"] is False and "未登录" in r4.json()["msg"],
+              r4.json().get("msg", ""))
+        json.dump({"logged": True, "at": "t", "note": ""}, open(st_path, "w", encoding="utf-8"))
+        db.set_applied(["RF1"], 0)
+    finally:
+        appmod._do_apply = _real_do_apply
 
     # ---- 20. 风控冷却锁：命中后禁止重跑，避免连续请求延长封控 ----
     db.clear_risk()
@@ -558,6 +732,7 @@ def main():
     c0 = client.get("/api/counts").json()
     need = ("total", "active", "offline", "new", "applied", "salary_missing", "desc_done", "starred", "replied")
     check("计数-字段齐全", all(k in c0 for k in need), str(list(c0.keys())))
+    check("计数-含投递失败数", "apply_failed" in c0, str(list(c0.keys())))
     r5 = client.get("/api/jobs?page=1&size=5").json()
     check("计数-列表响应带 counts", "counts" in r5 and r5["counts"]["total"] == c0["total"])
 
@@ -576,7 +751,8 @@ def main():
 
     # ---- 简历解析画像 ----
     import resume as resume_mod
-    sample = """范鑫
+    # 注意：这是**虚构**的测试样本，不要换成真实简历（仓库是公开的）
+    sample = """张三
 4年经验 大专 在职 月内到岗
 个人优势
 擅长编写复杂SQL，熟悉的数据库有MySQL、Hive、ClickHouse，oracle
@@ -587,7 +763,7 @@ def main():
 数据分析师 8-12K 厦门
 数据开发 9-13K 南京
 工作经历
-厦门小鱼号餐饮管理有限公司 数据分析师 2023.09-至今
+厦门某餐饮管理有限公司 数据分析师 2023.09-至今
 数据采集与处理：基于开放API每日定时抓取业务数据并写入ClickHouse，使用Python自动化处理
 数据分析与报表：使用SQL进行清洗关联分析，输出供应链报表
 可视化与BI：使用Power BI搭建看板与大屏
@@ -692,6 +868,16 @@ def main():
     check("回复-HR回复页接口", rpl.get("total", 0) >= 1 and _a_rows
           and _a_rows[0].get("reply_note"), f"total={rpl.get('total')}")
     check("回复-接口带同步状态", "sync" in rpl and "running" in rpl["sync"])
+    # 2026-10-23 用户要求：投递完就进 HR 回复页（不用等已回复），状态分「等待回复/已回复」
+    db.upsert_jobs([mk("RP1")], rid2)
+    db.set_applied(["RP1"], 1)          # 只投递、未回复
+    _rpl2 = client.get("/api/replies?limit=100").json()
+    _wait = [x for x in _rpl2.get("rows", []) if x.get("job_id") == "RP1"]
+    check("回复-投递即入列表(等待回复)", bool(_wait) and _wait[0]["replied"] == 0
+          and (_rpl2.get("waiting") or 0) >= 1, f"waiting={_rpl2.get('waiting')}")
+    check("回复-已回复计数与总数分离",
+          (_rpl2.get("replied") or 0) >= 1 and (_rpl2.get("total") or 0) > (_rpl2.get("replied") or 0),
+          f"total={_rpl2.get('total')} replied={_rpl2.get('replied')}")
     st_path2 = appmod.crawler.STATE_FILE
     old3 = open(st_path2, encoding="utf-8").read() if os.path.exists(st_path2) else None
     json.dump({"logged": False, "at": "", "note": ""}, open(st_path2, "w", encoding="utf-8"))
@@ -806,6 +992,9 @@ def main():
           and _lprows[0]["boss_title"] == "招聘经理")
     check("平台-城市码表", lpmod.CITY_CODE.get("厦门") == "090040"
           and lpmod.CITY_CODE.get("泉州") == "090030")
+    # 城市码兜底表：同步失败/首次使用也能映射福建核心城
+    check("平台-城市码兜底含福建核心城", lpmod._CITY_FALLBACK.get("厦门") == "090040"
+          and lpmod._CITY_FALLBACK.get("福州") == "090020")
     _body = lpmod.build_body("数据分析", "090040", 2)
     check("平台-请求体currentPage从0起", _body["data"]["mainSearchPcConditionForm"]["currentPage"] == 1
           and _body["data"]["mainSearchPcConditionForm"]["dq"] == "090040")
@@ -813,6 +1002,67 @@ def main():
     check("平台-猎聘行入库", nlp == 2 and db.get_job("lp1974831551")["source"] == "liepin")
     check("平台-猎聘薪资解析", db.get_job("lp1974831551")["salary_min"] == 20
           and db.get_job("lp23847163")["salary_min"] is None)
+    # 薪资格式：猎聘原始是小写 k（10-15k），BOSS 是 K，两平台并排看很别扭 → 入库统一大写
+    _resp_low = json.dumps({"flag": 1, "data": {"data": {"jobCardList": [
+        {"job": {"jobId": "9999991", "title": "数据开发", "salary": "10-15k·13薪",
+                 "link": "https://www.liepin.com/job/19999991.shtml", "jobKind": "2"}}],
+        "pagination": {"currentPage": 0, "pageSize": 40, "totalPage": 1}}}})
+    _c_low, _ = lpmod.parse_resp(_resp_low)
+    _r_low = lpmod.normalize(_c_low, "数据分析", "厦门", "090040")
+    check("平台-薪资小写k统一为大写K",
+          bool(_r_low) and _r_low[0]["salary"] == "10-15K·13薪",
+          str(_r_low[0]["salary"] if _r_low else None))
+    # 岗位详情「打开原页」：文案和链接必须跟平台一致（曾写死「在 BOSS 打开」，猎聘岗位看着像跳 BOSS）
+    check("UI-打开原页文案按平台切换", "?'在猎聘打开':'在 BOSS 打开'" in _html
+          and '>在 BOSS 打开</a>' not in _html)
+    # 平台判定必须「域名优先」：source 字段丢失时也不能把猎聘画成 BOSS（2026-10-26 用户踩过）
+    check("UI-平台判定以链接域名为准",
+          r"/liepin\.com/i.test(String(j.job_url" in _html
+          and "const _isLp=(j.source==='liepin')||/liepin\\.com/i.test(_url)" in _html)
+    # 页面版本戳：判断浏览器是否还在用旧页面（旧页面会显示旧时间）
+    _root = client.get("/")
+    check("UI-页面版本戳已注入",
+          'id="buildStamp"' in _html and "__BUILD__" not in _root.text
+          and "v__BUILD__" not in _root.text, _root.text[_root.text.find('buildStamp'):][:60])
+
+    # ---- 手机版：独立页面 /m + 手机 UA 自动跳转 ----
+    _mres = client.get("/m")
+    _mhtml = _mres.text
+    check("手机版-/m 可访问且是独立页面",
+          _mres.status_code == 200 and 'id="jobList"' in _mhtml
+          and 'class="tabbar"' in _mhtml and 'id="jobSheet"' in _mhtml
+          and "__BUILD__" not in _mhtml, str(_mres.status_code))
+    check("手机版-不依赖桌面表格布局",
+          "jobList" in _mhtml and "<table" not in _mhtml.lower(),
+          "含 table" if "<table" in _mhtml.lower() else "无表格")
+    _ua = ("Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 "
+           "(KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1")
+    _mr = client.get("/", headers={"user-agent": _ua}, follow_redirects=False)
+    check("手机版-手机UA访问 / 自动跳 /m",
+          _mr.status_code in (302, 307) and _mr.headers.get("location") == "/m",
+          f"{_mr.status_code} {_mr.headers.get('location')}")
+    _md = client.get("/?desktop=1", headers={"user-agent": _ua})
+    check("手机版-?desktop=1 强制电脑版",
+          _md.status_code == 200 and 'id="nav-jobs"' in _md.text and 'class="tabbar"' not in _md.text)
+    _pc = client.get("/", headers={"user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+                     follow_redirects=False)
+    check("手机版-桌面UA仍进电脑版", _pc.status_code == 200 and 'id="nav-jobs"' in _pc.text,
+          str(_pc.status_code))
+    # 设计令牌必须与电脑版**完全一致**（2026-10-26 用户反馈「手机版割裂感很强」：
+    # 当时手机版自己另起了一套背景/圆角/红色薪资，观感和电脑版像两个产品）
+    import re as _re
+
+    def _tokens(txt):
+        m = _re.search(r":root\{(.*?)\}", txt, _re.S)
+        return dict(_re.findall(r"(--[\w-]+)\s*:\s*([^;]+);", m.group(1))) if m else {}
+
+    _ti, _tm = _tokens(_html), _tokens(_mhtml)
+    _keys = ["--primary", "--ink", "--body", "--muted", "--muted-soft", "--hairline",
+             "--hairline-strong", "--canvas", "--surface-soft", "--surface-strong",
+             "--r-xs", "--r-sm", "--r-md", "--r-lg", "--r-full", "--shadow-card"]
+    _diff = {k: (_ti.get(k, "").strip(), _tm.get(k, "").strip()) for k in _keys
+             if _ti.get(k, "").strip() != _tm.get(k, "").strip()}
+    check("手机版-设计令牌与电脑版逐项一致", not _diff, str(_diff))
     t_lp, _ = db.query_jobs({"source": "liepin"})
     t_boss, rows_boss = db.query_jobs({"source": "boss"})
     check("平台-source筛选猎聘=2", t_lp == 2, f"n={t_lp}")
@@ -847,6 +1097,20 @@ def main():
         (r["source"] or "boss") == "liepin" for r in jlp["rows"]))
     lst = client.get("/api/login_state?platform=liepin").json()
     check("平台-API-猎聘登录态键", "logged" in lst and "login_open" in lst)
+    # 猎聘登录态交叉校验（2026-10-26 实测：profile 里没有 lt_auth，界面却显示「已登录」，
+    # 点岗位被跳到登录页 —— 用户以为是跳错平台）
+    json.dump({"logged": True, "at": "2026-10-26 00:00:00", "note": "手动登录"},
+              open(lpmod.STATE_FILE, "w", encoding="utf-8"))
+    json.dump([{"name": "other", "value": "1", "domain": ".liepin.com"}],
+              open(lpmod.COOKIE_FILE, "w", encoding="utf-8"))
+    _lst = lpmod.get_login_state()
+    check("猎聘-状态说有登录但 cookie 无 lt_auth → 判未登录",
+          _lst.get("logged") is False and _lst.get("stale") is True, str(_lst.get("note")))
+    json.dump([{"name": "lt_auth", "value": "x", "domain": ".liepin.com"}],
+              open(lpmod.COOKIE_FILE, "w", encoding="utf-8"))
+    check("猎聘-cookie 有 lt_auth 才认已登录", lpmod.get_login_state().get("logged") is True)
+    check("猎聘-落盘 cookie 供校验的接口存在",
+          hasattr(lpmod, "save_cookies") and hasattr(lpmod, "cookies_have_login"))
     rk = client.get("/api/risk").json()
     check("平台-API-risk含liepin", "liepin" in rk)
     qt = client.get("/api/quota").json()
@@ -943,6 +1207,35 @@ def main():
     check("技能缺口-只统计达到阈值的技能", all(x["jobs"] >= 3 for x in gp["gap"]))
     check("技能缺口-带平台筛选", client.get("/api/skills/gap?source=boss").json()["total"] >= 1)
 
+    # ---- 技能薪资分析：构造「带 Flink 的高薪组 vs 不带的低薪组」验证溢价/偏好度 ----
+    def _mk_ss(jid, salary, skills, kw="数据分析", cc="101230200"):
+        return {**mk(jid, salary), "skills": skills, "keyword": kw, "city_code": cc,
+                "detail_text": "", "welfare": "五险一金"}
+    _ss_rows = []
+    # 高薪组：8 条 20-25K，都带 Flink
+    for i in range(8):
+        _ss_rows.append(_mk_ss(f"SF{i}", "20-25K", "Flink|Kafka"))
+    # 低薪组：12 条 6-8K，都不带 Flink
+    for i in range(12):
+        _ss_rows.append(_mk_ss(f"SB{i}", "6-8K", "Excel"))
+    db.upsert_jobs(_ss_rows, rid2)
+    _ss = client.get("/api/skills/salary").json()
+    check("技能薪资-接口结构", _ss["total"] >= 1 and "skills" in _ss
+          and _ss["median_salary"] is not None and _ss["high_threshold"] is not None,
+          f'total={_ss.get("total")}')
+    _flink = next((x for x in _ss["skills"] if x["skill"] == "Flink"), None)
+    check("技能薪资-Flink 溢价为正", _flink is not None and _flink["premium"] > 0
+          and _flink["salary"] > _flink["base"],
+          f'flink={_flink}')
+    check("技能薪资-Flink 高薪偏好度大于1", _flink is not None and _flink["lift"] > 1
+          and _flink["high_rate"] == 100.0,
+          f'lift={_flink and _flink["lift"]} high_rate={_flink and _flink["high_rate"]}')
+    _excel = next((x for x in _ss["skills"] if x["skill"] == "Excel"), None)
+    check("技能薪资-低薪组技能溢价为负", _excel is not None and _excel["premium"] < 0,
+          f'excel={_excel}')
+    check("技能薪资-min_jobs 过滤生效", all(x["jobs"] >= 5 for x in _ss["skills"]))
+    check("技能薪资-平台筛选可用", client.get("/api/skills/salary?source=boss").json()["total"] >= 1)
+
     cv = client.get("/api/conversion?by=source").json()
     check("转化-按平台分组", cv["by"] == "source" and len(cv["rows"]) >= 1, str(cv.get("rows"))[:60])
     check("转化-支持其他维度", client.get("/api/conversion?by=keyword").json()["by"] == "keyword")
@@ -974,7 +1267,8 @@ def main():
     check("备份-生成文件", _bk_ok, str(_bp.get("path", ""))[-30:])
 
     _lc = client.get("/api/liepin_cities").json()
-    check("猎聘-城市码列表", "厦门" in _lc["cities"] and len(_lc["cities"]) >= 10)
+    check("猎聘-城市码列表", "厦门" in _lc["cities"] and len(_lc["cities"]) >= 10
+          and "count" in _lc and "synced_at" in _lc)
 
     # 猎聘无坐标 → 用同城同区 BOSS 坐标补近似点
     db.upsert_jobs([{**mk("LPAPX"), "job_id": "lpAPX", "source": "liepin", "lng": "", "lat": ""}], rid3)
@@ -994,6 +1288,45 @@ def main():
     check("补抓-只有猎聘时不需要 BOSS 登录",
           _appm._pending_has_boss([], {"source": "liepin"}) is False)
 
+    # ---- 下线防误杀：连续未出现阈值 + 覆盖率闸门 + 误杀撤销 ----
+    _KW, _CC = "防误杀", "999999"
+    def _mkx(jid):
+        return {**mk(jid), "keyword": _KW, "city_code": _CC, "city_name": "测试城"}
+    _rid_x = db.create_run(_KW, "测试城", 1, "test")
+    db.upsert_jobs([_mkx("X1"), _mkx("X2"), _mkx("X3"), _mkx("X4"), _mkx("X5")], _rid_x)
+    # 第 1 轮只重新命中 3/5（60%，刚好过闸）：X4/X5 miss_count=1，不应下线
+    _o1 = db.mark_offline([(_KW, _CC)], {"X1", "X2", "X3"})
+    check("防误杀-单轮未出现不下线",
+          _o1 == 0 and db.get_job("X4")["status"] == "active"
+          and db.get_job("X4")["miss_count"] == 1, f"off={_o1}")
+    # 第 2 轮依然没出现 → 累计 2 次，才判下线
+    _o2 = db.mark_offline([(_KW, _CC)], {"X1", "X2", "X3"})
+    check("防误杀-连续两轮未出现才下线",
+          _o2 == 2 and db.get_job("X4")["status"] == "offline"
+          and db.get_job("X5")["status"] == "offline", f"off={_o2}")
+    # 重新出现 → 复活且计数清零
+    db.upsert_jobs([_mkx("X4")], _rid_x)
+    check("防误杀-重新出现即复活", db.get_job("X4")["status"] == "active"
+          and db.get_job("X4")["miss_count"] == 0)
+    # 覆盖率闸门：5 条活跃只重新命中 2 条（40% < 60%）→ 整段跳过，一条都不判下线
+    _o3 = db.mark_offline([(_KW, _CC)], {"X1", "X2"}, min_miss=1)
+    check("防误杀-覆盖率不足跳过判定",
+          _o3 == 0 and db.get_job("X3")["status"] == "active"
+          and db.get_job("X5")["status"] == "offline", f"off={_o3}")
+    # 撤销：最近 24h 内判的下线可一键回滚
+    _rc = db.recover_offline(hours=24)
+    check("防误杀-误杀可撤销", _rc >= 1 and db.get_job("X5")["status"] == "active"
+          and db.get_job("X5")["miss_count"] == 0, f"recovered={_rc}")
+    # 旧数据没有 offline_at（加列前判的下线）→ hours=0 整体撤销
+    _cl3 = db.conn()
+    _cl3.execute("UPDATE jobs SET status='offline', offline_at=NULL WHERE job_id='X1'")
+    _cl3.commit(); _cl3.close()
+    _rc0 = db.recover_offline(hours=0)
+    check("防误杀-无时间戳旧下线可整体撤销",
+          _rc0 >= 1 and db.get_job("X1")["status"] == "active", f"recovered={_rc0}")
+    _cl2 = db.conn(); _cl2.execute("DELETE FROM jobs WHERE city_code='999999'")
+    _cl2.commit(); _cl2.close()
+
     # 清理：删猎聘测试行，恢复猎聘风控/预算为干净态
     _cl = db.conn(); _cl.execute("DELETE FROM jobs WHERE source='liepin'"); _cl.commit(); _cl.close()
     db.clear_risk(source="liepin")
@@ -1005,20 +1338,207 @@ def main():
         import shutil as _sh
         _sh.rmtree(_bkdir, ignore_errors=True)
     # 还原被测试伪造的登录态文件（Cookie 是真实凭据，必须原样写回）
+    # 注意：读到的原内容若为空/空白，说明本来就没有有效内容 → 删掉，绝不写回一个 0 字节文件
+    #（2026-10-23 踩过：把空串写回后 login_state.json 变成 0 字节，界面显示「状态文件损坏」）
     try:
-        if old is not None:
-            open(st_path, "w", encoding="utf-8").write(old)
+        if _st_orig and _st_orig.strip():
+            open(st_path, "w", encoding="utf-8").write(_st_orig)
         elif os.path.exists(st_path):
             os.remove(st_path)
     except Exception:
         pass
     try:
-        if old_ck is not None:
-            open(ck_path, "w", encoding="utf-8").write(old_ck)
+        if _ck_orig and _ck_orig.strip():
+            open(ck_path, "w", encoding="utf-8").write(_ck_orig)
         elif os.path.exists(ck_path):
             os.remove(ck_path)
     except Exception:
         pass
+    # 回归：测试跑完绝不能把真实登录态文件写坏（历史上被写成了 0 字节 / 假状态）
+    _note_after = str(appmod.crawler.get_login_state().get("note") or "")
+    check("清理-登录态文件未被测试写坏", "状态文件损坏" not in _note_after, _note_after[:60])
+
+    # ---- 21. 隐私闸：要推到 GitHub 的文件不能含个人/凭据信息 ----
+    # 背景：2026-10-23 发现 e2e 的简历样本用了真实姓名+真实公司，公开仓库 140 个 commit 全带
+    try:
+        import push_gh as ghmod
+        _hits = ghmod.scan_private()
+        check("隐私-待推文件无个人/凭据信息", _hits == [], str(_hits[:3]))
+        _gi = open(".gitignore", encoding="utf-8").read()
+        check("隐私-闸门函数可用且词表在 data 下（data/ 已被忽略）",
+              hasattr(ghmod, "scan_private") and os.sep + "data" + os.sep in ghmod.TERMS_FILE
+              and "data/" in _gi)
+    except ImportError:
+        check("隐私-推送脚本可导入", False, "push_gh 导入失败")
+
+    # ---- 22. 外网访问口令门禁（内网穿透时用；本机直连不受影响） ----
+    _akey = ""
+    try:
+        _akey = open(appmod._ACCESS_FILE, encoding="utf-8").read().strip()
+    except OSError:
+        _akey = ""
+    _PROXY = {"cf-connecting-ip": "203.0.113.9", "cf-ray": "e2e-test"}
+    if _akey:
+        r = client.get("/api/counts", headers=_PROXY)
+        check("口令-隧道无口令被拦", r.status_code == 401 and "访问口令" in r.text, str(r.status_code))
+        # ngrok 转发**不带** CF 头，只能靠 Host 头识别（2026-10-26 实测漏洞：曾把隧道流量当本机放行）
+        r = client.get("/api/counts", headers={"host": "ocean-rental-throwing.ngrok-free.dev"})
+        check("口令-ngrok隧道（无CF头，靠Host识别）也被拦", r.status_code == 401, str(r.status_code))
+        check("口令-本机直连免口令", client.get("/api/counts").status_code == 200)
+        r = client.post("/__login", data={"k": "wrong-key"}, headers=_PROXY)
+        check("口令-错口令被拒", r.status_code == 401, str(r.status_code))
+        client.post("/__login", data={"k": _akey}, headers=_PROXY)   # 种 cookie
+        check("口令-登录后可访问", client.get("/api/counts", headers=_PROXY).status_code == 200)
+    else:
+        check("口令-未配置时完全放行", client.get("/api/counts").status_code == 200)
+
+    # ---- 抓取浏览器：Chrome / Edge 双支持 ----
+    r = client.get("/api/browser")
+    check("浏览器-接口可用", r.status_code == 200)
+    b = r.json()
+    avail = b.get("available") or []
+    check("浏览器-返回本机可用列表", isinstance(avail, list))
+    check("浏览器-偏好取值合法", b.get("pref") in ("auto", "chrome", "edge"))
+    check("浏览器-可用项字段完整",
+          all(x.get("name") in ("chrome", "edge") and x.get("exe") and x.get("version")
+              for x in avail))
+    if avail:
+        check("浏览器-当前选择必须在可用列表内",
+              any(x["name"] == b["current"].get("name") for x in avail))
+        check("浏览器-非自动时当前项等于偏好",
+              b["pref"] == "auto" or b["current"].get("name") == b["pref"])
+    check("浏览器-拒绝未知浏览器",
+          client.post("/api/browser", json={"name": "firefox"}).json().get("ok") is False)
+    # profile 分家：换浏览器只给 Edge 加后缀，Chrome 路径必须原样（否则现有登录态全丢）
+    check("浏览器-Chrome profile 路径不变",
+          crawler.profile_for_browser(crawler.PROFILE_DIR, "chrome") == crawler.PROFILE_DIR)
+    _edge_prof = crawler.profile_for_browser(crawler.PROFILE_DIR, "edge")
+    check("浏览器-Edge profile 独立", _edge_prof != crawler.PROFILE_DIR and
+          _edge_prof.endswith("_edge"))
+    check("浏览器-profile 不受尾部斜杠影响",
+          crawler.profile_for_browser(crawler.PROFILE_DIR + "\\", "edge") == _edge_prof)
+    check("浏览器-无头 UA 不带 Headless 特征",
+          "Headless" not in crawler.browser_ua("chrome", None)
+          and "Headless" not in crawler.browser_ua("edge", None))
+    check("浏览器-Edge UA 带 Edg 段，Chrome 不带",
+          "Edg/" in crawler.browser_ua("edge", None)
+          and "Edg/" not in crawler.browser_ua("chrome", None))
+    check("浏览器-前端有切换入口",
+          'id="chipBrowser"' in _html and "function showBrowserPick(" in _html
+          and "function loadBrowser(" in _html)
+    check("浏览器-前端启动时加载浏览器信息", "safe(()=>loadBrowser())" in _html)
+
+    # ---- 获取配置页外观（2026-10-27 统一：同宽/同节奏/圆角/hero 随视图显隐）----
+    check("配置页-外层统一限宽",
+          "#view-config{max-width:960px;margin:0 auto}" in _html)
+    check("配置页-主卡片不再自带宽度",
+          'id="cfgCard" style="max-width' not in _html)
+    check("配置页-上下卡片同宽（含获取历史/投递记录）",
+          "#view-config .card{margin-bottom:20px}" in _html)
+    check("配置页-section 间距统一",
+          "#view-config .sect{margin:34px 0 6px" in _html)
+    check("配置页-两栏三栏间距一致",
+          "#view-config .row2,#view-config .row3{gap:16px}" in _html)
+    check("配置页-次要操作改用软链接（不再是标题级字重）",
+          ".linkbtn.soft{" in _html and 'class="linkbtn soft"' in _html)
+    check("配置页-城市同步按钮不再 float 抢基线",
+          '<label>城市 <span style="float:right">' not in _html and 'class="label-row"' in _html)
+    check("配置页-说明字段与输入框对齐（不再 padding 硬凑）",
+          ".field-note{" in _html and 'class="field-note"' in _html)
+    check("配置页-底部操作条有分隔线",
+          ".form-actions{" in _html and 'class="form-actions"' in _html)
+    check("设计-筛选块与城市标签用圆角 token",
+          ".opt{padding:8px 14px" in _html
+          and _html[_html.find(".opt{"):_html.find(".opt{") + 320].find("border-radius:var(--r-xs)") >= 0
+          and _html[_html.find(".ctag{"):_html.find(".ctag{") + 260].find("border-radius:var(--r-xs)") >= 0)
+    check("画像-信息卡固定四列且圆角",
+          ".prof-meta{display:grid;grid-template-columns:repeat(4,minmax(0,1fr))" in _html)
+    check("画像-技能按核心/其他分组渲染",
+          ".prof-skillgroup" in _html and "prof-skillgroup" in _html.split("function renderProfile")[1][:2600])
+    check("画像-技能分组不再深浅交替",
+          "coreList.map(s=>chip(s,true))" in _html and "restList.map(s=>chip(s,false))" in _html)
+    check("视图-深色 hero 只在岗位列表显示",
+          "hp.style.display=(v==='jobs')" in _html and "querySelector('.hero')" in _html)
+
+    # ---- 启动方式（serve.py 统一入口，2026-10-28）----
+    _serve_p = os.path.join(BASE, "serve.py")
+    check("启动-serve.py 存在", os.path.exists(_serve_p))
+    _srv = open(_serve_p, encoding="utf-8").read() if os.path.exists(_serve_p) else ""
+    check("启动-子命令齐全",
+          all(('"%s"' % k) in _srv for k in ("start", "stop", "restart", "status", "logs", "open")))
+    # 探测脚本必须先 import 再 exit：之前写成 exit 在前，import 永远执行不到，
+    # 结果任何 3.10+ 的解释器都被判成"依赖齐全"，启动必崩
+    _probe_i = _srv.find("_PROBE =")
+    _probe_seg = _srv[_probe_i:_probe_i + 300] if _probe_i >= 0 else ""
+    _imp = _probe_seg.find("import %s;")
+    _exi = _probe_seg.find("sys.exit(")
+    check("启动-解释器探测先 import 后判版本", _imp >= 0 and _exi > _imp)
+    check("启动-后台启动脱离控制台",
+          "DETACHED_PROCESS" in _srv and "CREATE_BREAKAWAY_FROM_JOB" in _srv)
+    check("启动-探活以监听 PID 为准（launcher 会派生）",
+          "real = find_listener()" in _srv and "real != proc.pid" not in _srv)
+    check("启动-日志轮转", "def rotate_log" in _srv and ".1.log" in _srv)
+
+    # bat 必须是纯 ASCII：cmd.exe 按 ANSI(GBK) 解析批处理文件，
+    # UTF-8 中文会被当成命令执行，报一堆"不是内部或外部命令"
+    for _batn in ("start.bat", "stop.bat", "status.bat", "tunnel.bat", "start_tunnel.bat", "findpy.cmd"):
+        _batp = os.path.join(BASE, _batn)
+        _raw = open(_batp, "rb").read() if os.path.exists(_batp) else None
+        check("启动-%s 存在且纯 ASCII" % _batn,
+              _raw is not None and all(b < 128 for b in _raw))
+    _startbat = open(os.path.join(BASE, "start.bat"), encoding="ascii", errors="ignore").read()
+    check("启动-双击 start.bat 默认执行 start",
+          "if \"%~1\"==\"\"" in _startbat and "serve.py start" in _startbat)
+    check("启动-bat 共用解释器探测", 'call "%~dp0findpy.cmd"' in _startbat)
+    check("忽略项-日志目录不入库", "logs/" in open(os.path.join(BASE, ".gitignore"), encoding="utf-8").read())
+
+    # ---- 远程访问状态（页面里直接看隧道开没开、地址、口令）----
+    import tunnel
+    _tl_r = client.get("/api/tunnel")
+    check("远程-接口可用", _tl_r.status_code == 200)
+    _tl = _tl_r.json()
+    check("远程-字段齐全",
+          all(k in _tl for k in ("online", "provider", "provider_label", "url", "fixed",
+                                 "stale", "key_set", "key", "is_local_request", "checked_at")))
+    check("远程-本机直连标记", _tl.get("is_local_request") is True)
+    check("远程-状态文件地址一致", _tl.get("url") == (open(tunnel.URL_FILE, encoding="utf-8").read().strip()
+                                                if os.path.exists(tunnel.URL_FILE) else ""))
+    # 在线 = 有地址且进程还在；只有地址文件不算（用户关掉隧道窗口后文件还在，地址已失效）
+    check("远程-地址在但进程不在就算离线",
+          _tl.get("online") is False or _tl.get("pid") is not None)
+    check("远程-过期地址有标记", isinstance(_tl.get("stale"), bool))
+    check("远程-前端有远程卡片",
+          'id="remoteCard"' in _html and 'id="remoteUrl"' in _html and 'id="remoteKey"' in _html)
+    check("远程-前端状态加载与复制", "function loadTunnel(" in _html
+          and "function copyTunnel(" in _html and "safe(()=>loadTunnel())" in _html)
+    check("远程-顶栏有入口", 'id="navRemote"' in _html and "function gotoRemote(" in _html)
+    _mhtml = open(os.path.join(BASE, "static", "m.html"), encoding="utf-8").read()
+    check("远程-手机端也显示隧道状态",
+          'id="mTunnel"' in _mhtml and "/api/tunnel" in _mhtml)
+
+    # 页面一键启停（不再让用户去双击 bat、也不显示"上次的地址已断开"这类提示）
+    _appsrc = open(os.path.join(BASE, "app.py"), encoding="utf-8").read()
+    _tunsrc = open(os.path.join(BASE, "tunnel.py"), encoding="utf-8").read()
+    check("远程-一键启停接口",
+          '@app.post("/api/tunnel/start")' in _appsrc and '@app.post("/api/tunnel/stop")' in _appsrc)
+    check("远程-启动为后台常驻",
+          "DETACHED_PROCESS" in _appsrc and "logs\", \"tunnel.log" in _appsrc)
+    check("远程-页面有启动/停止按钮",
+          'id="btnTunStart"' in _html and 'id="btnTunStop"' in _html
+          and "function toggleTunnel(" in _html)
+    check("远程-离线时不显示过期地址", "hasUrl?t.url:'—'" in _html)
+    check("远程-不再用文字指引用户双击 bat", "双击 <code>tunnel.bat</code>" not in _html)
+    # ngrok 免费版不允许 agent 走 http 代理（ERR_NGROK_9009），启动前必须剥掉代理变量
+    check("隧道-启动前剥离代理变量",
+          "def clean_env(" in _tunsrc and "env=clean_env()" in _tunsrc)
+    # ngrok.exe / cloudflared.exe 是控制台程序，不压住就会弹黑窗口并一直挂在前台
+    check("隧道-子进程不弹控制台窗口",
+          "NO_WINDOW = 0x08000000" in _tunsrc and _tunsrc.count("creationflags=NO_WINDOW") >= 4)
+    check("隧道-单实例锁（防连点起两个 ngrok）",
+          "def acquire_lock(" in _tunsrc and "def release_lock(" in _tunsrc
+          and "LOCK_FILE" in _tunsrc)
+    check("远程-用 pythonw 启动隧道（无控制台）",
+          "pythonw.exe" in _appsrc and "pyexe = _pyw" in _appsrc)
 
     # ---- 汇总 ----
     passed = sum(1 for s, *_ in RESULTS if s == "PASS")

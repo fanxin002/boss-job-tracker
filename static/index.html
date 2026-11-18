@@ -2,8 +2,13 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>BOSS 岗位追踪</title>
+<!-- 手机上「添加到主屏幕」后像 App 一样全屏运行（内网穿透/局域网访问时用） -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="岗位追踪">
+<meta name="theme-color" content="#1a2129">
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
 <script src="/static/vendor/leaflet/leaflet.js"></script>
@@ -13,13 +18,28 @@
   :root{
     --primary:#1c69d4; --primary-active:#0653b6; --primary-disabled:#d6d6d6;
     --ink:#262626; --body:#3c3c3c; --body-strong:#1a1a1a; --muted:#6b6b6b; --muted-soft:#9a9a9a;
-    --hairline:#e6e6e6; --hairline-strong:#cccccc;
+    --hairline:#e6e8ec; --hairline-strong:#d5d8de;
     --canvas:#ffffff; --surface-soft:#f7f7f7; --surface-card:#fafafa; --surface-strong:#ebebeb;
     --surface-dark:#1a2129; --surface-dark-elevated:#262e38;
     --on-primary:#fff; --on-dark:#fff; --on-dark-soft:#bbbbbb;
     --success:#22c55e; --warning:#f59e0b; --error:#dc2626;
     --ff:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","微软雅黑",
          "Helvetica Neue",Arial,Helvetica,sans-serif;
+
+    /* ===== 形状尺度（全站唯一一套，13 种散落圆角收敛到这 5 档）=====
+       原实现全站控件都是直角，筛选区/下拉"太方正"；这里统一柔化并锁定。 */
+    --r-xs:6px;      /* 小标签、骨架块、微元素 */
+    --r-sm:8px;      /* 输入框、下拉、按钮 */
+    --r-md:12px;     /* 卡片、面板、下拉菜单 */
+    --r-lg:16px;     /* 弹窗、大卡片 */
+    --r-full:999px;  /* 胶囊：平台 chip、分页、数字徽标 */
+    /* 控件高度 */
+    --ctl-h:40px; --ctl-h-sm:32px; --ctl-h-xs:28px;
+    /* 交互反馈（统一过渡与焦点环，避免各处各写一套）*/
+    --ease:cubic-bezier(.22,1,.36,1); --dur:.16s;
+    --ring:0 0 0 3px rgba(28,105,212,.15);
+    --shadow-card:0 1px 2px rgba(16,24,40,.04),0 10px 26px -16px rgba(16,24,40,.16);
+    --shadow-pop:0 12px 32px -12px rgba(16,24,40,.22),0 2px 6px rgba(16,24,40,.06);
   }
   *{box-sizing:border-box;margin:0;padding:0}
   html,body{height:100%}
@@ -41,7 +61,7 @@
   .navlinks a.on{color:var(--ink);border-bottom-color:var(--ink)}
   .navlinks a.on.brand-active{color:var(--primary);border-bottom-color:var(--primary)}
   .nav-badge{display:inline-block;margin-left:6px;padding:0 6px;min-width:18px;text-align:center;
-    font-size:11px;line-height:16px;background:var(--ink);color:#fff;border-radius:9px;vertical-align:1px}
+    font-size:11px;line-height:16px;background:var(--ink);color:#fff;border-radius:var(--r-full);vertical-align:1px}
   th.sortable{cursor:pointer;user-select:none}
   th.sortable:hover{color:var(--ink)}
   th.sortable.desc,th.sortable.asc{color:var(--ink)}
@@ -62,7 +82,8 @@
   .dot.ok{background:var(--success)} .dot.run{background:var(--warning)} .dot.err{background:var(--error)}
   /* 平台登录状态：一个平台一个胶囊，点击即登录该平台 */
   .platlogin{display:flex;gap:6px;align-items:center;margin-right:4px}
-  .pchip{display:flex;align-items:center;gap:6px;height:28px;padding:0 10px;border:1px solid var(--hairline);
+  .pchip{display:flex;align-items:center;gap:6px;height:var(--ctl-h-xs);padding:0 11px;border:1px solid var(--hairline);
+    border-radius:var(--r-full);
     background:var(--canvas);font-size:12px;color:var(--muted);cursor:pointer;white-space:nowrap}
   .pchip b{color:var(--ink);font-weight:700}
   .pchip:hover{border-color:var(--ink)}
@@ -78,15 +99,18 @@
   .dashnote.show{display:block}
 
   /* ---------- 按钮 ---------- */
-  button{border-radius:0;cursor:pointer;transition:background .12s,border-color .12s,color .12s;white-space:nowrap}
-  .btn{height:40px;padding:0 24px;font-size:14px;font-weight:700;letter-spacing:.5px;background:var(--canvas);
-    color:var(--ink);border:1px solid var(--hairline-strong)}
-  .btn:hover{border-color:var(--ink)}
+  button{border-radius:var(--r-sm);cursor:pointer;
+    transition:background-color var(--dur) var(--ease),border-color var(--dur) var(--ease),
+      color var(--dur) var(--ease),box-shadow var(--dur) var(--ease);white-space:nowrap}
+  button:focus-visible{outline:none;box-shadow:var(--ring)}
+  .btn{height:40px;padding:0 22px;font-size:14px;font-weight:700;letter-spacing:.4px;background:var(--canvas);
+    color:var(--ink);border:1px solid var(--hairline-strong);border-radius:var(--r-sm)}
+  .btn:hover{border-color:var(--ink);background:var(--surface-soft)}
   .btn-primary{background:var(--primary);color:var(--on-primary);border:1px solid var(--primary)}
   .btn-primary:hover{background:var(--primary-active);border-color:var(--primary-active)}
-  .btn-sm{height:32px;padding:0 14px;font-size:13px;letter-spacing:.2px}
+  .btn-sm{height:32px;padding:0 14px;font-size:13px;letter-spacing:.2px;border-radius:var(--r-xs)}
   .btn-danger{background:var(--canvas);color:var(--error);border:1px solid var(--hairline-strong)}
-  .btn-danger:hover{border-color:var(--error)}
+  .btn-danger:hover{border-color:var(--error);background:#fffafa}
   button:disabled{background:var(--primary-disabled);border-color:var(--primary-disabled);color:var(--muted);cursor:not-allowed}
   .linkbtn{background:none;border:none;color:var(--ink);font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;
     cursor:pointer;padding:0}
@@ -120,7 +144,8 @@
   .riskbar.show{display:flex}
   .riskbar b{color:var(--ink);font-weight:700}
 
-  .card{background:var(--canvas);border:1px solid var(--hairline);padding:24px;margin-bottom:16px}
+  .card{background:var(--canvas);border:1px solid var(--hairline);padding:24px;margin-bottom:16px;
+    border-radius:var(--r-md);box-shadow:var(--shadow-card)}
   .card > h3{font-size:12px;font-weight:700;letter-spacing:1.4px;text-transform:uppercase;color:var(--ink);
     margin-bottom:18px;display:flex;align-items:center;gap:10px}
   .card > h3 .right{margin-left:auto;font-weight:400;font-size:12px;letter-spacing:.2px;text-transform:none;color:var(--muted)}
@@ -130,30 +155,46 @@
 
   /* ---------- 表单 ---------- */
   label{display:block;font-size:12px;font-weight:400;color:var(--muted);margin:16px 0 6px;letter-spacing:.2px}
-  input[type=text],input[type=number],input[type=time],select,textarea{
-    width:100%;height:40px;padding:0 14px;border:1px solid var(--hairline-strong);border-radius:0;background:var(--canvas);
-    color:var(--ink);font-size:14px;font-weight:400;transition:border-color .12s}
-  textarea{height:auto;padding:10px 14px;line-height:1.6}
-  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--ink)}
+  input[type=text],input[type=number],input[type=time],input[type=date],input[type=datetime-local],
+  input[type=email],input[type=search],input[type=password],select,textarea{
+    width:100%;height:var(--ctl-h);padding:0 14px;border:1px solid var(--hairline-strong);
+    border-radius:var(--r-sm);background:var(--canvas);
+    color:var(--ink);font-size:14px;font-weight:400;
+    transition:border-color var(--dur) var(--ease),box-shadow var(--dur) var(--ease),background-color var(--dur) var(--ease)}
+  /* 下拉：去掉系统原生箭头（Windows 上是又小又硬的三角，跟整体不搭），换成与圆角一致的自绘箭头 */
+  select{
+    appearance:none;-webkit-appearance:none;-moz-appearance:none;
+    padding-right:38px;cursor:pointer;
+    background-image:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1.5 2.2L6 6.4l4.5-4.2' fill='none' stroke='%236b6b6b' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat:no-repeat;background-position:right 14px center;
+  }
+  select:hover{border-color:#b9bec7}
+  .card textarea{height:auto}
+  textarea{height:auto;padding:11px 14px;line-height:1.6}
+  input::placeholder,textarea::placeholder{color:#a8adb6}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--primary);box-shadow:var(--ring)}
   .row2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
   .row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
 
   /* ---------- 城市选择器 ---------- */
   .picker{position:relative}
-  .picker .box{display:flex;flex-wrap:wrap;gap:8px;align-items:center;min-height:40px;padding:5px 8px;
-    border:1px solid var(--hairline-strong);background:var(--canvas);cursor:text}
-  .picker .box.focus{border-color:var(--ink)}
-  .picker input{flex:1;width:auto;min-width:120px;height:28px;border:none;padding:0 6px;font-size:14px;font-weight:400;
-    outline:none;box-shadow:none!important;background:transparent}
+  .picker .box{display:flex;flex-wrap:wrap;gap:8px;align-items:center;min-height:var(--ctl-h);padding:5px 8px;
+    border:1px solid var(--hairline-strong);background:var(--canvas);cursor:text;border-radius:var(--r-sm);
+    transition:border-color var(--dur) var(--ease),box-shadow var(--dur) var(--ease)}
+  .picker .box.focus{border-color:var(--primary);box-shadow:var(--ring)}
+  .picker input{flex:1;width:auto;min-width:120px;height:var(--ctl-h-xs);border:none;padding:0 6px;font-size:14px;font-weight:400;
+    outline:none;box-shadow:none!important;background:transparent;border-radius:var(--r-xs)}
   .ctag.nolp{background:#fffaf0;border-color:#f0c36d;color:#b45309}
   .ctag{display:inline-flex;align-items:center;gap:6px;background:var(--surface-soft);border:1px solid var(--hairline);
-    color:var(--ink);padding:2px 8px;font-size:13px;line-height:1.6}
+    color:var(--ink);padding:2px 8px;font-size:13px;line-height:1.6;border-radius:var(--r-xs)}
   .ctag i{font-style:normal;cursor:pointer;color:var(--muted-soft);font-size:13px}
   .ctag i:hover{color:var(--error)}
-  .drop{position:absolute;left:0;right:0;top:calc(100% + 2px);background:var(--canvas);border:1px solid var(--hairline-strong);
-    max-height:260px;overflow:auto;z-index:20;display:none;padding:4px}
+  .drop{position:absolute;left:0;right:0;top:calc(100% + 4px);background:var(--canvas);border:1px solid var(--hairline);
+    border-radius:var(--r-md);box-shadow:var(--shadow-pop);
+    max-height:260px;overflow:auto;z-index:20;display:none;padding:6px}
   .drop.show{display:block}
-  .ditem{display:flex;align-items:center;gap:10px;padding:9px 12px;font-size:14px;font-weight:400;color:var(--body);cursor:pointer}
+  .ditem{display:flex;align-items:center;gap:10px;padding:9px 12px;font-size:14px;font-weight:400;color:var(--body);cursor:pointer;
+    border-radius:var(--r-xs)}
   .ditem:hover,.ditem.on{background:var(--surface-soft);color:var(--ink)}
   .ditem .p{color:var(--muted-soft);font-size:12px;margin-left:auto}
   .drop .none{padding:14px;color:var(--muted);font-size:13px;text-align:center}
@@ -161,24 +202,86 @@
   /* ---------- 选择 chip（filter-chip） ---------- */
   .opts{display:flex;flex-wrap:wrap;gap:8px}
   .opt{padding:8px 14px;border:1px solid var(--hairline-strong);background:var(--canvas);color:var(--ink);
-    font-size:12px;font-weight:400;letter-spacing:.5px;cursor:pointer;line-height:1.2}
+    font-size:12px;font-weight:400;letter-spacing:.5px;cursor:pointer;line-height:1.2;border-radius:var(--r-xs);
+    transition:border-color var(--dur) var(--ease),background-color var(--dur) var(--ease),color var(--dur) var(--ease)}
   .opt:hover{border-color:var(--ink)}
   .opt.on{background:var(--ink);border-color:var(--ink);color:var(--on-dark);font-weight:700}
 
+  /* ---------- 获取配置页 ---------- */
+  /* 整页同宽：原来主卡片 860、下面「获取历史/投递记录」两张表是全宽，
+     切页时宽度来回跳，很割裂。统一交给外层容器约束，卡片自己不再写 max-width */
+  #view-config{max-width:960px;margin:0 auto}
+  #cfgCard,#remoteCard{padding:32px 36px}
+  /* 远程访问卡：一行状态 + 地址/口令两行；值用等宽字体，过长省略 */
+  .rm-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .rm-actions{margin-left:auto;display:flex;gap:8px}
+  .rm-state{font-size:13px;font-weight:700;color:var(--ink)}
+  .rm-state.muted{color:var(--muted);font-weight:400}
+  .rm-line{display:flex;align-items:center;gap:12px;margin-top:12px}
+  .rm-line .k{flex:0 0 64px;font-size:12px;color:var(--muted)}
+  .rm-line .v{flex:1;min-width:0;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:13px;color:var(--ink);background:var(--surface-soft);border:1px solid var(--hairline);
+    border-radius:var(--r-xs);padding:7px 10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+   .rm-line .v.empty{color:var(--muted-soft);font-family:inherit;background:transparent;border-style:dashed}
+   /* 远程访问首次配置引导：三步走，完成后自动收起 */
+   .rg{border:1px solid var(--hairline);border-radius:var(--r-md);background:var(--surface-card);margin:0 0 20px}
+   .rg>summary{cursor:pointer;padding:13px 16px;font-size:13px;font-weight:700;color:var(--ink);list-style:none}
+   .rg>summary::-webkit-details-marker{display:none}
+   .rg>summary::before{content:'▸';display:inline-block;margin-right:8px;color:var(--muted);transition:transform var(--dur) var(--ease)}
+   .rg[open]>summary::before{transform:rotate(90deg)}
+   .rg>summary::after{content:'展开 / 收起';float:right;font-weight:400;font-size:11px;color:var(--muted-soft)}
+   .rg-body{padding:0 18px 16px}
+   .rg-step{display:flex;gap:12px;padding:14px 0;border-top:1px solid var(--hairline)}
+   .rg-n{flex:0 0 22px;height:22px;border-radius:var(--r-full);background:var(--ink);color:var(--on-dark);
+     font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;margin-top:2px}
+   .rg-step.done .rg-n{background:var(--success);color:#fff}
+   .rg-txt{flex:1;min-width:0}
+   .rg-txt>b{font-size:13px;color:var(--ink)}
+   .rg-txt p{margin:4px 0 10px;font-size:12px;line-height:1.65;color:var(--muted)}
+   .rg-ops{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+   .rg-ops input[type=text],.rg-ops input[type=password]{height:32px;font-size:12px;flex:1 1 210px;min-width:150px;max-width:340px}
+   .rg-ok{font-size:12px;color:var(--muted)}
+   .rg-key{font-family:ui-monospace,Consolas,monospace;font-size:12px;margin-top:8px;color:var(--body)}
+   .rg-opt{margin-top:12px;padding:12px;background:var(--canvas);border:1px dashed var(--hairline-strong);border-radius:var(--r-xs)}
+   .rg-opt a{color:var(--primary)}
+   .rg-warn{margin-top:8px;font-size:12px;color:var(--warning);line-height:1.65}
+   #view-config .card{margin-bottom:20px}
+  /* section 节奏统一：上分隔大、下留小，紧接的表单不会贴到分隔线上 */
+  #view-config .sect{margin:34px 0 6px;padding-bottom:10px}
+  #view-config .sect:first-of-type{margin-top:6px}
+  #view-config .row2,#view-config .row3{gap:16px}
+  /* label 行：标题在左、次要操作靠右（不用 float，避免和标题抢基线） */
+  .label-row{display:flex;align-items:baseline;gap:12px}
+  .label-row > span:first-child{flex:0 0 auto}
+  .field-actions{margin-left:auto;display:flex;align-items:center;gap:16px;white-space:nowrap}
+  /* 次要操作：去掉 uppercase + 1.2px 字距 + 700 的"标题感"，回到普通链接层级 */
+  .linkbtn.soft{font-size:12px;font-weight:400;letter-spacing:0;text-transform:none;color:var(--muted)}
+  .linkbtn.soft:hover{color:var(--primary)}
+  /* 说明型字段：label 下直接开始，与左侧输入框顶部自然齐平 */
+  .field-note{font-size:12px;color:var(--muted-soft);line-height:1.65}
+  .field-note b{color:var(--body);font-weight:700}
+  /* 表单操作条：与上方内容用一条发丝线分开，不再直接悬空 */
+  .form-actions{margin-top:30px;padding-top:20px;border-top:1px solid var(--hairline);
+    display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+
   /* ---------- 筛选 ---------- */
-  .filters{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:16px 16px}
+  /* 筛选区：给控件一块浅底分组面板，把"表单方阵"变成"分组区域"（控件本身已是圆角）
+     列数用 auto-fit 自适应：宽屏排满，窄屏自动减列，不再固定 6 列导致右侧大片空白 */
+  .filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:16px 16px;
+    background:var(--surface-soft);border:1px solid var(--hairline);
+    border-radius:var(--r-md);padding:18px}
   /* 更多筛选：默认收起，展开后占满一整行，避免 17 个控件把首屏吃掉 */
   .fmore{display:none;grid-column:1/-1;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;
     padding-top:16px;margin-top:4px;border-top:1px dashed var(--hairline)}
   .fmore.open{display:grid}
   @media (max-width:1100px){.fmore{grid-template-columns:repeat(2,minmax(0,1fr))}}
-  @media (max-width:1420px){.filters{grid-template-columns:repeat(3,minmax(0,1fr))}}
+  /* 已由 auto-fit 自适应，不再强制固定列数（原来 1420px 断点会让宽屏右侧空一大片） */
   .fcell{min-width:0}
-  .fcell label{margin:0 0 6px;font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted)}
-  .fchips{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:20px;padding-top:16px;border-top:1px solid var(--hairline)}
+  .fcell label{margin:0 0 6px;font-size:12px;font-weight:500;letter-spacing:0;color:var(--muted)}
+  .fchips{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:14px}
   .fchips .ph{font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted-soft);margin-right:6px}
   .fchip{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--hairline-strong);padding:4px 10px;
-    font-size:12px;color:var(--ink);background:var(--canvas)}
+    font-size:12px;color:var(--ink);background:var(--canvas);border-radius:var(--r-full)}
   .fchip i{font-style:normal;cursor:pointer;color:var(--muted-soft)}
   .fchip i:hover{color:var(--error)}
 
@@ -193,7 +296,7 @@
   a{color:var(--primary);text-decoration:none}
   a:hover{text-decoration:underline}
   .tag{display:inline-block;padding:2px 8px;border:1px solid var(--hairline-strong);font-size:11px;line-height:1.6;
-    color:var(--muted);white-space:nowrap}
+    color:var(--muted);white-space:nowrap;border-radius:var(--r-xs)}
   .tag-new{background:var(--ink);border-color:var(--ink);color:var(--on-dark);font-weight:700;letter-spacing:.5px}
   .tag-off{border-color:var(--hairline);color:var(--muted-soft)}
   .tag-sal{border-color:var(--ink);color:var(--ink);font-weight:700}
@@ -236,10 +339,10 @@
   table.jobs th:nth-child(11),table.jobs td:nth-child(11){width:62px;white-space:nowrap}
   table.jobs th:nth-child(12),table.jobs td:nth-child(12){width:92px;text-align:center;white-space:nowrap}
   /* 平台图标列：图片形式，不占文字 */
-  .platicon{width:18px;height:18px;border-radius:5px;display:inline-block;vertical-align:-4px;
+  .platicon{width:18px;height:18px;border-radius:var(--r-xs);display:inline-block;vertical-align:-4px;
     box-shadow:0 1px 2px rgba(0,0,0,.14)}
   td.plat,th.plat{text-align:center}
-  .platicon.lg{width:20px;height:20px;border-radius:6px;vertical-align:-5px;margin-right:5px}
+  .platicon.lg{width:20px;height:20px;border-radius:var(--r-xs);vertical-align:-5px;margin-right:5px}
   .star{cursor:pointer;font-size:15px;line-height:1;color:#d4d4d8;background:none;border:none;padding:0 6px;height:auto}
   .star.on{color:#e6b800}
   .score{display:inline-block;min-width:26px;text-align:center;font-size:11px;font-weight:700;color:#111;
@@ -265,17 +368,19 @@
   .dash{display:flex;flex-direction:column;gap:20px}
   .dkpis{display:grid;grid-template-columns:repeat(4,1fr);gap:20px}
   @media (max-width:1100px){.dkpis{grid-template-columns:repeat(2,1fr)}}
-  .dk{background:var(--canvas);border:1px solid #ececec;border-radius:16px;padding:20px 22px}
+  .dk{background:var(--canvas);border:1px solid var(--hairline);border-radius:var(--r-md);padding:20px 22px;
+    box-shadow:var(--shadow-card)}
   .dk .lb{font-size:13px;color:#6b7280}
   .dk b{display:block;font-size:30px;font-weight:600;color:#111;margin-top:10px;letter-spacing:-.5px;
     font-variant-numeric:tabular-nums;line-height:1.2}
   .dk .dt{font-size:12.5px;margin-top:6px;color:#6b7280}
   .dk .dt.up{color:#15803d}
   .dk .dt.down{color:#b91c1c}
-  .dcard{background:var(--canvas);border:1px solid #ececec;border-radius:16px;padding:22px 24px}
+  .dcard{background:var(--canvas);border:1px solid var(--hairline);border-radius:var(--r-md);padding:22px 24px;
+    box-shadow:var(--shadow-card)}
   .dcard h3{font-size:17px;font-weight:600;color:#111;display:flex;align-items:center;gap:12px;margin-bottom:14px}
-  .seg{margin-left:auto;display:flex;gap:4px;background:#f4f4f5;padding:4px;border-radius:999px}
-  .seg button{border:none;background:transparent;border-radius:999px;height:30px;padding:0 16px;font-size:13px;
+  .seg{margin-left:auto;display:flex;gap:4px;background:#f4f4f5;padding:4px;border-radius:var(--r-full)}
+  .seg button{border:none;background:transparent;border-radius:var(--r-full);height:30px;padding:0 16px;font-size:13px;
     color:#525252;font-weight:400}
   .seg button:hover{color:#111}
   .seg button.on{background:#111;color:#fff}
@@ -288,10 +393,24 @@
   .gtitle.warn{color:#b45309}
   .gbrow{display:flex;align-items:center;gap:10px;padding:3px 0;font-size:12px}
   .gbl{flex:0 0 96px;color:var(--body);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .gbb{flex:0 0 200px;display:block;height:6px;background:#ececef;border-radius:3px;overflow:hidden}
-  .gbb i{display:block;height:100%;background:#111;border-radius:3px}
+  .gbb{flex:0 0 200px;display:block;height:6px;background:#ececef;border-radius:var(--r-full);overflow:hidden}
+  .gbb i{display:block;height:100%;background:#111;border-radius:var(--r-full)}
   .gtitle.warn+.gbrow .gbb i,.gapwrap>div:nth-child(2) .gbb i{background:#e8a33d}
   .gbn{flex:0 0 30px;text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
+  /* 技能薪资分析 */
+  .ssal{width:100%;border-collapse:collapse;font-size:12.5px}
+  .ssal th{text-align:left;color:var(--muted);font-weight:600;padding:6px 4px;border-bottom:1px solid var(--hairline);white-space:nowrap}
+  .ssal td{padding:6px 4px;border-bottom:1px solid #f6f6f7;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .ssal tr:last-child td{border-bottom:none}
+  .ssal .sk{color:var(--body);font-weight:600;white-space:normal}
+  .ssal .bar{display:block;height:6px;background:#ececef;border-radius:var(--r-full);overflow:hidden;min-width:60px}
+  .ssal .bar i{display:block;height:100%;border-radius:var(--r-full);background:#111}
+  .ssal .bar i.pos{background:#c92a2a}   /* 溢价为正：该技能岗位更贵（红=涨，符合国内习惯）*/
+  .ssal .bar i.neg{background:#2b8a3e}   /* 溢价为负：要求该技能的岗位反而更便宜 */
+  .ssal .pm{font-weight:600}
+  .ssal .pm.pos{color:#c92a2a}
+  .ssal .pm.neg{color:#2b8a3e}
+  .ssal .lift{color:#b45309}
   /* 转化 / 日程 */
   table.mini{width:100%;border-collapse:collapse;font-size:12px}
   table.mini th{text-align:left;color:var(--muted);font-weight:600;padding:6px 4px;border-bottom:1px solid var(--hairline)}
@@ -305,27 +424,37 @@
   .brow2{display:grid;grid-template-columns:78px 1fr 46px;gap:10px;align-items:center;font-size:12.5px;
     margin-bottom:10px}
   .brow2 .bl{color:#404040;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .brow2 .bt{height:14px;background:#f4f4f5;border-radius:4px;overflow:hidden}
-  .brow2 .bt i{display:block;height:100%;border-radius:4px;background:#111}
+  .brow2 .bt{height:14px;background:#f4f4f5;border-radius:var(--r-full);overflow:hidden}
+  .brow2 .bt i{display:block;height:100%;border-radius:var(--r-full);background:#111}
   .brow2 .bt i.lime{background:#d8f36b}
   .brow2 b{text-align:right;font-weight:500;color:#404040;font-variant-numeric:tabular-nums}
 
   /* ---------- 简历画像 ---------- */
-  .prof-meta{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px 18px;
-    padding:12px 14px;background:var(--surface-soft);border:1px solid var(--hairline);font-size:12px;color:var(--muted)}
+  /* 固定 4 列：7 项信息排成 4+3，比 auto-fill 挤成 5+2 更整齐 */
+  .prof-meta{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px 18px;
+    padding:14px 16px;background:var(--surface-soft);border:1px solid var(--hairline);
+    border-radius:var(--r-sm);font-size:12px;color:var(--muted)}
   .prof-meta b{color:var(--ink);font-weight:500}
-  .prof-skills{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
-  .prof-skills .tag{white-space:nowrap}
+  @media (max-width:760px){.prof-meta{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  /* 技能分两组：核心（深色）在前、其余（浅色）在后，避免深浅色在同一片网格里交替跳 */
+  .prof-skills{margin-top:14px}
+  .prof-skillgroup + .prof-skillgroup{margin-top:12px}
+  .prof-skillgroup .gl{font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;
+    color:var(--muted-soft);margin-bottom:8px}
+  .prof-skillgroup .gl b{color:var(--ink);letter-spacing:0;text-transform:none;font-weight:700;margin-left:6px}
+  .prof-skillgroup .tags{display:flex;flex-wrap:wrap;gap:6px}
+  .prof-skillgroup .tags .tag{white-space:nowrap}
 
   /* ---------- 弹窗 ---------- */
   .mask{position:fixed;inset:0;background:rgba(26,33,41,.55);display:none;align-items:center;justify-content:center;
     z-index:40;padding:24px}
   .mask.show{display:flex}
-  .modal{background:var(--canvas);border:1px solid var(--hairline-strong);max-width:600px;width:100%;padding:32px}
+  .modal{background:var(--canvas);border:1px solid var(--hairline);max-width:600px;width:100%;padding:32px;
+    border-radius:var(--r-lg);box-shadow:var(--shadow-pop)}
   /* 获取进度弹窗 */
   .modal.prog{max-width:520px}
-  .progbar{height:10px;background:#eeeef1;border-radius:999px;overflow:hidden;margin:18px 0 10px}
-  .progbar i{display:block;height:100%;width:2%;background:var(--primary);border-radius:999px;
+  .progbar{height:10px;background:#eeeef1;border-radius:var(--r-full);overflow:hidden;margin:18px 0 10px}
+  .progbar i{display:block;height:100%;width:2%;background:var(--primary);border-radius:var(--r-full);
     transition:width .5s ease}
   .progline{display:flex;justify-content:space-between;align-items:baseline;font-size:13px;color:var(--body)}
   .progline b{font-size:20px;color:var(--ink);font-variant-numeric:tabular-nums}
@@ -334,7 +463,7 @@
   #progMask{z-index:36}
   /* 后台运行后的常驻进度胶囊（隐藏弹窗后的唯一回入口） */
   .progpill{position:fixed;right:24px;bottom:24px;z-index:46;display:none;align-items:center;gap:8px;
-    background:var(--ink);color:#fff;padding:10px 16px;border-radius:999px;font-size:12px;cursor:pointer;
+    background:var(--ink);color:#fff;padding:10px 16px;border-radius:var(--r-full);font-size:12px;cursor:pointer;
     box-shadow:0 10px 28px rgba(16,24,40,.22);user-select:none;transition:transform .12s,box-shadow .12s}
   .progpill.show{display:flex}
   .progpill:hover{transform:translateY(-1px);box-shadow:0 12px 32px rgba(16,24,40,.28)}
@@ -394,6 +523,80 @@
     .dcard{padding:16px}
     .dkpis{grid-template-columns:1fr 1fr}
   }
+
+  /* ========== 骨架屏扫光（加载反馈：骨架与进度状态） ==========
+     设计约束：
+     - 骨架块尺寸与最终内容一致（同高同宽），替换时不跳动
+     - 扫光只用 transform + opacity（GPU 合成，不触发重排/重绘）
+     - 低对比度渐变，避免"闪白刺眼"
+     - prefers-reduced-motion 下关闭扫光，内容切换也不做过渡 */
+  .sk{
+    display:block;position:relative;overflow:hidden;
+    /* 底色本身带轻微纵向明暗，避免"一块死灰"的塑料感 */
+    background:linear-gradient(180deg,#e9ebee,#edeff2);
+    border-radius:var(--r-xs);
+  }
+  /* 扫光：参考 Motion Lab 的「同色系宽柔渐变流动」，而不是硬白斜条。
+     做法：渐变里白色只占中间 20%、两侧完全透明 → 扫过时是"波纹"不是"闪光"；
+     保留在 ::after 上做 transform 动画（GPU 合成），不用 background-position（会重绘）。 */
+  .sk::after{
+    content:'';position:absolute;top:0;bottom:0;left:0;right:0;pointer-events:none;
+    background:linear-gradient(102deg,
+      rgba(255,255,255,0) 36%,
+      rgba(255,255,255,.42) 46%,
+      rgba(255,255,255,.72) 50%,
+      rgba(255,255,255,.42) 54%,
+      rgba(255,255,255,0) 64%);
+    transform:translateX(-100%);
+    animation:sk-sweep 1.2s linear infinite;   /* 匀速，避免快慢不均的"假"感 */
+  }
+  @keyframes sk-sweep{ to{ transform:translateX(100%);} }
+  /* 骨架块的出现也带轻微错位，让结构"长出来"而不是一次性闪现 */
+  .sk-line,.sk-title,.sk-tag,.sk-block{animation:sk-rise .35s cubic-bezier(.22,1,.36,1) backwards}
+  @keyframes sk-rise{ from{opacity:.55;transform:translateY(3px)} to{opacity:1;transform:none} }
+  /* 骨架条（文本行用）：高度=行高，宽度按层级；行距略宽，避免"挤在一起"的廉价感 */
+  .sk-line{height:12px;margin-bottom:10px}
+  .sk-line.w90{width:90%} .sk-line.w75{width:75%} .sk-line.w60{width:60%} .sk-line.w40{width:40%}
+  .sk-title{height:22px;width:52%;border-radius:var(--r-sm);margin-bottom:12px}
+  .sk-tag{height:24px;width:76px;border-radius:var(--r-md);display:inline-block;margin:0 8px 8px 0}
+  .sk-block{height:120px;border-radius:var(--r-md)}
+  .sk-row{display:flex;gap:12px;align-items:center;padding:10px 0}
+  .sk-row .sk{flex:none}
+  /* 四态容器：loading→success 柔和替换（650ms 主过渡 + 轻微位移/缩放做阻尼感）*/
+  .sk-swap{transition:opacity .65s cubic-bezier(.22,1,.36,1), transform .65s cubic-bezier(.22,1,.36,1)}
+  .sk-swap.in{opacity:0;transform:translateY(6px) scale(.995)}
+  /* 加载状态行：明确"正在做什么"，不是只有一堆灰块 */
+  .sk-status{
+    display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);
+    margin-bottom:12px;
+  }
+  .sk-status::before{
+    content:'';flex:none;width:10px;height:10px;border-radius:50%;
+    border:2px solid #d6d9de;border-top-color:#8a9199;
+    animation:sk-spin .8s linear infinite;
+  }
+  .sk-status.warn::before{border-color:#f0c36d;border-top-color:#b45309;animation:none}
+  @keyframes sk-spin{ to{ transform:rotate(360deg);} }
+  /* 弹窗最小高度：骨架与内容尺寸接近，加兜底避免切换时高度大幅塌陷 */
+  #jobMask .modal{min-height:520px}
+  .sk-err{
+    display:flex;align-items:center;gap:14px;padding:18px 16px;border-radius:var(--r-md);
+    background:#fffafa;border:1px solid #f5d5d5;color:#8a3b3b;font-size:13px;
+  }
+  .sk-err b{color:#c92a2a}
+  .sk-retry{
+    margin-left:auto;height:var(--ctl-h-sm);padding:0 14px;border-radius:var(--r-xs);cursor:pointer;
+    border:1px solid #e2b6b6;background:#fff;color:#b02a2a;font-size:12.5px;
+    transition:background-color var(--dur) var(--ease),border-color var(--dur) var(--ease);
+  }
+  .sk-retry:hover{background:#fff5f5}
+  .sk-retry:focus-visible{outline:2px solid #c92a2a;outline-offset:2px}
+  @media (prefers-reduced-motion: reduce){
+    .sk::after{animation:none;opacity:0}          /* 关闭扫光 */
+    .sk-line,.sk-title,.sk-tag,.sk-block{animation:none}
+    .sk-status::before{animation:none;border-top-color:#d6d9de}
+    .sk-swap{transition:none}                      /* 关闭替换动效 */
+  }
 </style>
 </head>
 <body>
@@ -416,6 +619,16 @@
         </span>
       </div>
       <span class="nav-status"><span class="dot" id="dotRun"></span><span id="runStatus">空闲</span></span>
+      <span class="nav-status" id="navRemote" onclick="gotoRemote()" style="cursor:pointer"
+            title="远程访问状态（内网穿透）。点一下查看公网地址和访问口令">
+        <span class="dot" id="dotRemote"></span><span id="remoteChip">远程 …</span>
+      </span>
+      <span class="pchip" id="chipBrowser" onclick="showBrowserPick()"
+            title="抓取用的浏览器。Chrome 和 Edge 都是 Chromium 内核，效果一样；点这里可以切换">
+        <b id="browserLabel">浏览器</b><span id="browserState">…</span>
+      </span>
+      <span class="nav-status" id="buildStamp" style="opacity:.55"
+            title="页面构建时间。若这里的时间比你刚改的时间还旧，说明浏览器加载的是缓存页，请按 Ctrl+F5 强制刷新">v__BUILD__</span>
       <button class="btn btn-sm" id="btnCancelLogin" style="display:none" onclick="cancelRepair()">取消</button>
       <button class="btn btn-sm" onclick="exportCsv()">导出 CSV</button>
       <button class="btn btn-sm" id="btnReply" onclick="syncReplies()" title="只同步 BOSS 会话；猎聘不支持自动同步（用岗位详情里的手动标记）">同步回复 BOSS</button>
@@ -501,19 +714,21 @@
             <div class="fcell"><label>求职阶段</label><select id="fStage">
               <option value="">全部</option><option value="interview">面试中</option><option value="offer">已拿 Offer</option><option value="rejected">未通过</option><option value="none">未进入阶段</option></select></div>
             <div class="fcell"><label>同岗合并</label><select id="fDedupe"><option value="">不合并</option><option value="1">合并同公司同岗位</option></select></div>
+            <div class="fcell" style="display:flex;align-items:flex-end">
+              <button class="btn btn-sm" onclick="undoOffline()" title="抓取翻页变浅/被风控截断时，在招岗位可能被误判下线。这个按钮把最近 24 小时内判的下线全部恢复为在招">撤销误杀（恢复 24h 内下线）</button></div>
           </div>
         </div>
         <div class="fchips" id="filterChips"><span class="ph">未使用筛选条件</span></div>
       </div>
 
       <div class="card">
-        <h3>岗位 <span class="right" id="totalHint"></span></h3>
+        <h3>岗位 <span class="right"><button class="linkbtn" id="btnRetryTop" onclick="retryFailed()" title="把投递失败的岗位（登录失效/风控/按钮没找到）重新排队投递">重投失败<em id="retryFailN" style="font-style:normal;color:#c92a2a"></em></button><span style="color:var(--hairline-strong);margin:0 12px">|</span><span class="muted" id="totalHint"></span></span></h3>
         <div class="applybar" id="applyBar" style="display:none">
           <b id="selCount">已选 0 条</b>
           <button class="btn btn-primary btn-sm" id="btnApply" onclick="applySelected()">投递选中岗位</button>
           <span class="vsep"></span>
           <button class="btn btn-sm" onclick="bulkAct('star','1')" title="给选中的岗位加星">收藏</button>
-          <select id="bulkStage" class="btn btn-sm" style="height:32px;padding:0 8px" onchange="if(this.value){bulkAct('stage',this.value);this.value=''}">
+          <select id="bulkStage" class="btn btn-sm" style="height:var(--ctl-h-sm);padding:0 8px" onchange="if(this.value){bulkAct('stage',this.value);this.value=''}">
             <option value="">批量标阶段…</option>
             <option value="interview">面试中</option><option value="offer">Offer</option>
             <option value="rejected">未通过</option><option value="clear">清除阶段</option></select>
@@ -558,7 +773,7 @@
           <table class="jobs replies">
             <thead><tr>
               <th>公司</th><th>岗位</th><th>薪资</th><th>匹配</th>
-              <th>回复时间</th><th>最后一句 / 备注</th><th>状态</th><th>操作</th>
+              <th title="已回复显示回复时间；等待回复显示投递时间">时间</th><th>最后一句 / 备注</th><th>状态</th><th>操作</th>
             </tr></thead>
             <tbody id="replyBody"></tbody>
           </table>
@@ -618,6 +833,17 @@
           <div id="dashSkillGap"></div>
         </div>
         <div class="dcard">
+          <h3>技能薪资分析
+            <span class="seg" id="segSkillSal">
+              <button class="on" data-k="jobs">需求热度</button>
+              <button data-k="premium">薪资溢价</button>
+              <button data-k="lift">高薪偏好</button>
+            </span>
+          </h3>
+          <div class="dashnote" id="dashSkillSalNote"></div>
+          <div id="dashSkillSal"></div>
+        </div>
+        <div class="dcard">
           <h3>投递转化
             <span class="seg" id="segConv">
               <button class="on" data-by="source">平台</button>
@@ -653,7 +879,91 @@
     </div>
 
     <div id="view-config" style="display:none">
-      <div class="card" id="cfgCard" style="max-width:860px">
+      <div class="card" id="remoteCard">
+        <h3>远程访问 <span class="right" style="display:flex;align-items:center;gap:14px">
+          <span id="remoteChecked"></span>
+           <button class="linkbtn soft" onclick="loadTunnel()">刷新</button></span></h3>
+
+         <details class="rg" id="remoteGuide" open>
+           <summary id="remoteGuideSummary">首次配置远程访问 · 按 3 步来</summary>
+           <div class="rg-body">
+             <div class="rg-step" id="rgStep1">
+               <span class="rg-n" id="rgN1">1</span>
+               <div class="rg-txt">
+                 <b>设置访问口令</b>
+                 <p>公网地址谁拿到谁都能打开看板。先设口令再开隧道，不设等于裸奔。自己电脑上打开不用输。</p>
+                 <div class="rg-ops">
+                   <input type="text" id="rgKeyInput" maxlength="32" placeholder="留空 = 自动生成 10 位" autocomplete="off">
+                   <button class="btn btn-primary btn-sm" onclick="setAccessKey()">生成 / 保存</button>
+                   <button class="btn btn-sm" onclick="copyTunnel('key')">复制口令</button>
+                   <span class="rg-ok" id="rgKeyState"></span>
+                 </div>
+                 <div class="rg-key" id="rgKeyValue"></div>
+               </div>
+             </div>
+
+             <div class="rg-step" id="rgStep2">
+               <span class="rg-n" id="rgN2">2</span>
+               <div class="rg-txt">
+                 <b>开启远程访问</b>
+                 <p>点「启动隧道」后等几秒，会自动生成公网 https 地址。首次会下载隧道工具（约 12MB），之后不用再下。</p>
+                 <div class="rg-ops">
+                   <button class="btn btn-primary btn-sm" id="rgBtnStart" onclick="toggleTunnel('start')">启动隧道</button>
+                   <button class="btn btn-sm" id="rgBtnStop" onclick="toggleTunnel('stop')" style="display:none">停止隧道</button>
+                 </div>
+                 <div class="rg-opt">
+                   <div class="muted" style="font-size:12px;line-height:1.65">
+                     可选 · 想要<b>固定地址</b>（重启隧道也不变）：免费注册
+                     <a href="https://dashboard.ngrok.com/get-started/your-authtoken" target="_blank" rel="noopener">ngrok 拿 authtoken</a>，
+                     粘贴到下面保存。不配也能用，只是每次重启地址会变。
+                   </div>
+                   <div class="rg-ops" style="margin-top:10px">
+                     <input type="password" id="rgTokenInput" placeholder="粘贴 ngrok authtoken（可选）" autocomplete="off">
+                     <button class="btn btn-sm" onclick="saveNgToken()">保存</button>
+                     <span class="rg-ok" id="rgTokenState"></span>
+                   </div>
+                 </div>
+               </div>
+             </div>
+
+             <div class="rg-step" id="rgStep3">
+               <span class="rg-n" id="rgN3">3</span>
+               <div class="rg-txt">
+                 <b>手机打开</b>
+                 <p>把地址和口令发到手机 → 浏览器打开 → 输一次口令（记 28 天）→「添加到主屏幕」，用起来跟 App 一样。</p>
+                 <div class="rg-ops">
+                   <button class="btn btn-sm" onclick="copyTunnel('both')">复制「地址 + 口令」</button>
+                   <span class="rg-ok" id="rgStep3State"></span>
+                 </div>
+               </div>
+             </div>
+             <div class="rg-warn" id="rgWarn"></div>
+           </div>
+         </details>
+
+         <div class="rm-row">
+          <span class="dot" id="remoteDot"></span>
+          <span class="rm-state muted" id="remoteState">未启动</span>
+          <span class="muted" id="remoteProvider"></span>
+          <span class="rm-actions">
+            <button class="btn btn-primary btn-sm" id="btnTunStart" onclick="toggleTunnel('start')">启动隧道</button>
+            <button class="btn btn-sm" id="btnTunStop" onclick="toggleTunnel('stop')" style="display:none">停止隧道</button>
+          </span>
+        </div>
+        <div class="rm-line">
+          <span class="k">公网地址</span>
+          <span class="v empty" id="remoteUrl">—</span>
+          <button class="btn btn-sm" onclick="copyTunnel('url')">复制</button>
+        </div>
+        <div class="rm-line">
+          <span class="k">访问口令</span>
+          <span class="v empty" id="remoteKey">—</span>
+          <button class="btn btn-sm" onclick="copyTunnel('key')">复制</button>
+        </div>
+        <div class="muted" id="remoteHint" style="margin-top:12px;line-height:1.7"></div>
+      </div>
+
+      <div class="card" id="cfgCard">
         <h3>获取配置</h3>
         <div class="sect">平台开关（点一次「立即获取」= 按顺序跑所有启用的平台）</div>
         <div class="row3">
@@ -661,15 +971,15 @@
           <div><label>猎聘</label><select id="cfgLiepinEnabled"><option value="0">关闭</option><option value="1">开启</option></select></div>
           <div><label>猎聘每城页数</label><select id="cfgLiepinPages"><option value="1">1 页</option><option value="2" selected>2 页</option><option value="3">3 页</option><option value="5">5 页</option></select></div>
         </div>
-        <div class="muted" id="platSummary" style="margin-bottom:6px"></div>
+        <div class="muted" id="platSummary" style="margin-top:10px"></div>
         <div id="platWarn"></div>
-        <div class="muted" style="line-height:1.6">关键词、城市、定时、浏览器模式两平台<b>共用一份配置</b>；风控与请求预算两平台各算各的。登录点顶部两个平台胶囊（「BOSS」「猎聘」各自独立登录态，长期有效）。猎聘只做获取/入库/看板合并，投递请到猎聘官网手动。</div>
+        <div class="muted" style="margin-top:6px;line-height:1.7">关键词、城市、定时、浏览器模式两平台<b>共用一份配置</b>；风控与请求预算两平台各算各的。登录点顶部两个平台胶囊（「BOSS」「猎聘」各自独立登录态，长期有效）。猎聘只做获取/入库/看板合并，投递请到猎聘官网手动。</div>
 
         <div class="sect">搜索范围（两平台共用）</div>
         <label>关键词（英文逗号分隔）</label>
         <input type="text" id="cfgKeywords" placeholder="数据分析,数据分析师,BI工程师">
 
-        <label>城市 <span style="float:right"><button class="linkbtn" onclick="syncCities()">同步 BOSS 城市库</button></span></label>
+        <label class="label-row"><span>城市</span><span class="field-actions"><button class="linkbtn soft" onclick="syncCities()">同步 BOSS 城市库</button><button class="linkbtn soft" onclick="syncLpCities()">同步猎聘城市码</button></span></label>
         <div class="picker" id="cityPicker">
           <div class="box" id="cityBox" onclick="focusCity()">
             <div id="cityTags" style="display:flex;gap:8px;flex-wrap:wrap"></div>
@@ -683,11 +993,11 @@
           <div>
             <label>BOSS 每城获取页数 <span class="help" onclick="showPagesHelp()" title="页数多少比较安全">?</span></label>
             <input type="number" id="cfgPages" min="1" max="30" value="3">
-            <div class="muted" id="pagesHint" style="margin-top:6px"></div>
+            <div class="muted" id="pagesHint" style="margin-top:8px"></div>
           </div>
           <div>
             <label>职位描述</label>
-            <div class="muted" style="padding-top:10px;line-height:1.5">
+            <div class="field-note">
               获取轮只抓列表，描述统一走顶部「补抓描述」<br>可按当前筛选/勾选分批补，随时可停
             </div>
           </div>
@@ -711,11 +1021,11 @@
         <div class="muted" style="margin-bottom:10px;line-height:1.6">
           技能不用手填：直接读你的 BOSS 在线简历，或上传简历文件自动解析。解析出的技能会用于计算每个岗位的匹配分。
         </div>
-        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+        <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center">
           <button class="btn btn-primary btn-sm" id="btnSyncResume" onclick="syncBossResume()">从 BOSS 同步简历</button>
           <button class="btn btn-sm" onclick="document.getElementById('resumeFile').click()">上传简历文件</button>
           <input type="file" id="resumeFile" accept=".pdf,.docx,.doc,.txt,.md" style="display:none" onchange="uploadResume(this)">
-          <span class="muted" id="resumeHint"></span>
+          <span class="muted" id="resumeHint" style="margin-left:6px"></span>
         </div>
         <div id="profBox" style="margin-top:14px"></div>
 
@@ -724,11 +1034,11 @@
         <textarea id="cfgGreeting" rows="2" maxlength="200" placeholder="您好，我对贵司的岗位很感兴趣"></textarea>
         <div class="row3">
           <div><label>单批上限</label><input type="number" id="cfgApplyMax" min="1" max="50" value="20"></div>
-          <div><label>间隔下限 秒</label><input type="number" id="cfgApplyIMin" min="3" max="120" value="12"></div>
-          <div><label>间隔上限 秒</label><input type="number" id="cfgApplyIMax" min="3" max="300" value="30"></div>
+          <div><label>间隔下限（秒）</label><input type="number" id="cfgApplyIMin" min="3" max="120" value="12"></div>
+          <div><label>间隔上限（秒）</label><input type="number" id="cfgApplyIMax" min="3" max="300" value="30"></div>
         </div>
 
-        <div style="margin-top:24px;display:flex;gap:16px;align-items:center">
+        <div class="form-actions">
           <button class="btn btn-primary" onclick="saveConfig()">保存配置</button>
           <span class="tag tag-sal" id="cfgDirty" style="display:none">未保存</span>
           <span class="muted">点「立即获取」会自动保存当前配置</span>
@@ -764,6 +1074,32 @@
 
 <div class="mask" id="jobMask">
   <div class="modal" style="max-width:820px">
+    <!-- 骨架层：尺寸刻意做成与最终内容一致（标题 22px / 标签 24px / 描述块 / 输入框 / 按钮），切换时不跳动 -->
+    <div id="jobSkeleton">
+      <div class="sk-status" role="status" id="jobSkStatus">正在读取岗位信息…</div>
+      <div class="sk sk-title"></div>
+      <div style="margin-bottom:14px">
+        <span class="sk sk-tag"></span><span class="sk sk-tag"></span>
+        <span class="sk sk-tag" style="width:110px"></span><span class="sk sk-tag" style="width:64px"></span>
+      </div>
+      <div class="sk sk-block" style="height:196px;margin-bottom:16px"></div>
+      <div class="sk sk-line w60" style="height:44px;border-radius:var(--r-sm);margin-bottom:14px"></div>
+      <div style="display:flex;gap:10px">
+        <div class="sk" style="height:52px;flex:1;border-radius:var(--r-sm)"></div>
+        <div class="sk" style="height:52px;flex:1;border-radius:var(--r-sm)"></div>
+      </div>
+      <div class="sk" style="height:var(--ctl-h-sm);width:230px;border-radius:var(--r-sm);margin-top:16px"></div>
+    </div>
+    <!-- 失败态：保留上下文（可关闭/可重试），不把用户困在弹窗里 -->
+    <div id="jobError" style="display:none">
+      <div class="sk-err">
+        <span>⚠️ <b>岗位信息读取失败</b><br><span class="muted" id="jobErrMsg" style="font-size:12px"></span></span>
+        <button class="sk-retry" id="jobRetry" onclick="retryOpenJob()">重试</button>
+        <button class="sk-retry" onclick="closeJob()" style="margin-left:8px" title="Esc 也能关闭">关闭</button>
+      </div>
+      <div class="muted" style="margin-top:12px;font-size:12px">也可以关闭后刷新页面再试；列表里的信息不会丢。</div>
+    </div>
+    <div id="jobContent" class="sk-swap" style="display:none">
     <div class="jobhead">
       <div style="display:flex;gap:16px;align-items:flex-start">
         <div style="flex:1;min-width:0"><b id="jobTitle"></b><div class="jobmeta" id="jobMeta"></div></div>
@@ -804,11 +1140,12 @@
       <button class="btn btn-sm" onclick="clearNextAt()">清除</button>
     </div>
     <div class="foot">
-      <a class="btn btn-sm" id="jobOpen" target="_blank" style="color:var(--ink);text-decoration:none;display:inline-flex;align-items:center">在 BOSS 打开</a>
+      <a class="btn btn-sm" id="jobOpen" target="_blank" rel="noopener" style="color:var(--ink);text-decoration:none;display:inline-flex;align-items:center">打开原页</a>
       <button class="btn btn-sm" onclick="saveNote()">保存备注</button>
       <button class="btn btn-sm" id="jobReplyBtn" onclick="toggleRepliedFromJob()">标记 HR 已回复</button>
       <button class="btn btn-primary btn-sm" id="jobApplyBtn" onclick="applyFromJob()">投递这个岗位</button>
     </div>
+    </div><!-- /#jobContent -->
   </div>
 </div>
 
@@ -816,7 +1153,7 @@
   <div class="modal" style="max-width:800px">
     <h3 id="logTitle">获取日志</h3>
     <div class="log" id="logBox" style="max-height:56vh"></div>
-    <div class="foot"><button class="btn" id="logClose">关闭</button></div>
+    <div class="foot"><button class="btn" id="logClose" onclick="closeLog()">关闭</button></div>
   </div>
 </div>
 
@@ -864,6 +1201,38 @@
 </div>
 
 <script>
+/* ========== 访问口令：任何接口 401 都直接去登录页 ==========
+   穿透访问时口令过期/没带 cookie，接口会全 401；不处理的话页面停在
+   「0 个岗位 · 未登录」的空壳上，看着像数据丢了（2026-10-23 手机实测踩到） */
+(function(){
+  const raw=window.fetch.bind(window);
+  window.fetch=async function(...a){
+    const r=await raw(...a);
+    if(r.status===401&&location.pathname!=='/__login')location.href='/__login';
+    return r;
+  };
+})();
+/* 登录态补刷：不挂在 boot 里（boot 中间任何一步抛错就轮不到它）——页面 load 后独立补一次；
+   手机从别的 App 切回来也补一次，回来看到的数据才是新的 */
+window.addEventListener('load',function(){
+  setTimeout(function(){try{getLoginState()}catch(e){}},1200);
+});
+document.addEventListener('visibilitychange',function(){
+  if(document.hidden)return;
+  try{getLoginState()}catch(e){}
+});
+/* 后台不轮询：页面切走/锁屏后，所有 ≥1s 的定时器直接跳过，切回来立刻恢复。
+   两个原因：① 手机上省电省流量；② 走 ngrok 免费额度（2 万请求/月）时，
+   一个常驻标签页每分钟几十次轮询，几天就把额度刷爆。 */
+(function(){
+  const _si=window.setInterval;
+  window.setInterval=function(fn,ms){
+    if(typeof fn==='function'&&typeof ms==='number'&&ms>=1000){
+      return _si(function(){ if(document.hidden)return; return fn.apply(this,arguments); },ms);
+    }
+    return _si.apply(window,arguments);
+  };
+})();
 /* ========== 基础 ========== */
 const FALLBACK_CITIES=[["北京","101010100"],["上海","101020100"],["广州","101280100"],["深圳","101280600"],
   ["杭州","101210100"],["成都","101270100"],["厦门","101230200"],["福州","101230100"],["泉州","101230500"]];
@@ -895,6 +1264,182 @@ function uiDialog(opt){
   });
 }
 
+/* ========== 远程访问状态（内网穿透） ========== */
+let TUNNEL=null;
+async function loadTunnel(){
+  try{TUNNEL=await(await fetch('/api/tunnel')).json()}catch(e){return}
+  renderTunnel();
+}
+function renderTunnel(){
+  const t=TUNNEL||{},on=!!t.online;
+  const dotCls='dot'+(on?' ok':'');
+  const d=document.getElementById('dotRemote');if(d)d.className=dotCls;
+  const rd=document.getElementById('remoteDot');if(rd)rd.className=dotCls;
+  const set=(id,txt,cls)=>{const e=document.getElementById(id);if(!e)return;e.textContent=txt;if(cls!==undefined)e.className=cls};
+  set('remoteChip','远程 '+(on?'已开启':'未启动'));
+  set('remoteState',on?'在线':'未启动','rm-state'+(on?'':' muted'));
+  set('remoteProvider',on?((t.provider_label||'隧道')+(t.fixed?' · 地址固定':' · 地址会变')):'');
+  set('remoteChecked',t.checked_at?('检查于 '+t.checked_at):'');
+  // 地址只在真正在线时显示：隧道断了还挂着上次的地址，只会误导（点进去就是 3200 离线）
+  const u=document.getElementById('remoteUrl');
+  const hasUrl=on&&!!t.url;
+  if(u){u.textContent=hasUrl?t.url:'—';u.className='v'+(hasUrl?'':' empty')}
+  const k=document.getElementById('remoteKey');
+  if(k){k.textContent=t.key||'未设置';k.className='v'+(t.key?'':' empty')}
+  // 状态行和引导里的两组按钮保持同步
+  [['btnTunStart','btnTunStop'],['rgBtnStart','rgBtnStop']].forEach(pair=>{
+    const bs=document.getElementById(pair[0]),bp=document.getElementById(pair[1]);
+    if(bs)bs.style.display=on?'none':'';
+    if(bp)bp.style.display=on?'':'none';
+  });
+  const h=document.getElementById('remoteHint');
+  if(h){
+    h.style.display=on?'':'none';
+    h.innerHTML=on?(t.fixed
+      ?'地址固定，重启隧道也不会变。手机浏览器打开后「添加到主屏幕」，用起来跟 App 一样。'
+      :'地址每次重启隧道都会变；想要固定地址，在上面第 2 步填一个 ngrok authtoken（免费）。'):'';
+  }
+  renderGuide(t);
+}
+
+/* 配置引导：按真实状态点亮步骤，全部完成后自动收起。文案一律 textContent */
+let guideWasDone=false;
+function renderGuide(t){
+  const keySet=!!t.key_set,on=!!t.online,allDone=keySet&&on;
+  const mark=(n,done)=>{
+    const step=document.getElementById('rgStep'+n),num=document.getElementById('rgN'+n);
+    if(step)step.className='rg-step'+(done?' done':'');
+    if(num)num.textContent=done?'✓':String(n);
+  };
+  mark(1,keySet); mark(2,on); mark(3,false);   // 第 3 步是手动动作，不自动打勾
+  const set=(id,txt)=>{const e=document.getElementById(id);if(e)e.textContent=txt};
+  set('rgKeyState',keySet?'已设置':'还没设置');
+  set('rgTokenState',t.has_ng_token?'已配置固定地址':'未配置（地址每次会变）');
+  set('rgStep3State',on?'隧道在线，可以复制了':'等第 2 步完成');
+  const kv=document.getElementById('rgKeyValue');
+  if(kv)kv.textContent=keySet?(t.is_local_request&&t.key?('当前口令：'+t.key):'口令已设置（只在本机显示）'):'';
+  const w=document.getElementById('rgWarn');
+  if(w)w.textContent=t.stale?'⚠ 上次的地址已失效，重新点「启动隧道」即可。':'';
+  const sum=document.getElementById('remoteGuideSummary');
+  if(sum)sum.textContent=allDone?'✅ 远程访问已配好 · 点开查看步骤或复制地址'
+    :(keySet?'远程访问配置 · 还差一步（启动隧道）':'首次配置远程访问 · 按 3 步来');
+  const g=document.getElementById('remoteGuide');
+  if(g){if(allDone&&!guideWasDone)g.open=false;else if(!allDone)g.open=true}
+  guideWasDone=allDone;
+}
+async function postJSON(url,body){
+  try{
+    const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    return await r.json();
+  }catch(e){return {ok:false,msg:'请求失败，检查服务是否还在运行'}}
+}
+async function setAccessKey(){
+  const inp=document.getElementById('rgKeyInput');
+  const r=await postJSON('/api/access-key',{key:((inp&&inp.value)||'').trim()});
+  toast(r.msg||(r.ok?'已保存':'失败'));
+  if(r.ok&&inp)inp.value='';
+  await loadTunnel();
+}
+async function saveNgToken(){
+  const inp=document.getElementById('rgTokenInput');
+  const r=await postJSON('/api/tunnel/token',{token:((inp&&inp.value)||'').trim()});
+  toast(r.msg||(r.ok?'已保存':'失败'));
+  if(r.ok&&inp)inp.value='';
+  await loadTunnel();
+}
+async function toggleTunnel(action){
+  const start=action==='start';
+  const ids=start?['btnTunStart','rgBtnStart']:['btnTunStop','rgBtnStop'];
+  const saved=ids.map(id=>{const e=document.getElementById(id);return [e,e?e.textContent:'']});
+  saved.forEach(([e])=>{if(e){e.disabled=true;e.textContent=start?'启动中…':'停止中…'}});
+  if(start)toast('正在启动隧道，首次可能要下载工具，最多等 40 秒…');
+  try{
+    const r=await(await fetch('/api/tunnel/'+action,{method:'POST'})).json();
+    toast(r.msg||(r.ok?'完成':'失败'));
+  }catch(e){
+    toast('请求失败，检查服务是否还在运行');
+  }
+  saved.forEach(([e,txt])=>{if(e){e.disabled=false;e.textContent=txt}});
+  await loadTunnel();
+}
+function gotoRemote(){
+  switchView('config');
+  setTimeout(()=>{const el=document.getElementById('remoteCard');if(el)el.scrollIntoView({behavior:'smooth',block:'center'})},60);
+}
+function copyTunnel(which){
+  const t=TUNNEL||{};
+  if(which==='both'){
+    if(!t.is_local_request){toast('口令只在本机显示，请到电脑上复制');return}
+    if(!t.online||!t.url||!t.key){toast('隧道还没开，或口令没设好');return}
+    copyText(t.url+'\n访问口令：'+t.key,'地址和口令已复制，发到手机即可');
+    return;
+  }
+  if(which==='key'&&t.key==='已设置'){toast('口令只在本机网页显示，请到电脑上查看');return}
+  const v=which==='url'?t.url:t.key;
+  if(!v||v==='—'){toast(which==='url'?'隧道还没开，没有公网地址':'还没有口令');return}
+  copyText(v,which==='url'?'公网地址已复制':'口令已复制');
+}
+function copyText(v,tip){
+  const done=()=>toast(tip||'已复制');
+  if(navigator.clipboard&&window.isSecureContext){
+    navigator.clipboard.writeText(v).then(done).catch(()=>fallbackCopy(v,done));
+  }else fallbackCopy(v,done);
+}
+function fallbackCopy(v,done){
+  const ta=document.createElement('textarea');
+  ta.value=v;ta.style.position='fixed';ta.style.top='-1000px';ta.style.opacity='0';
+  document.body.appendChild(ta);ta.select();
+  try{document.execCommand('copy');done()}catch(e){toast('复制失败，请手动选中复制')}
+  document.body.removeChild(ta);
+}
+
+/* ========== 抓取浏览器（Chrome / Edge 通用） ========== */
+let BROWSER_INFO=null;
+async function loadBrowser(){
+  BROWSER_INFO=await(await fetch('/api/browser')).json();
+  renderBrowserChip();
+}
+function renderBrowserChip(){
+  const c=(BROWSER_INFO&&BROWSER_INFO.current)||{};
+  const lab=document.getElementById('browserLabel'),st=document.getElementById('browserState');
+  if(!lab||!st)return;
+  if(!c.name){lab.textContent='无浏览器';st.textContent='';return}
+  lab.textContent=c.label;
+  st.textContent='v'+String(c.version||'').split('.')[0];
+}
+async function showBrowserPick(){
+  if(!BROWSER_INFO){await loadBrowser().catch(()=>{})}
+  const info=BROWSER_INFO||{};
+  const avail=info.available||[];
+  if(!avail.length){
+    await uiDialog({title:'没有可用浏览器',okText:'知道了',hideCancel:true,
+      html:'<p>本机既没装 Chrome 也没装 <b>Edge</b>。随便装一个就行，代码会自动选用，不用改配置。</p>'});
+    return;
+  }
+  const pref=info.pref||'auto';
+  const opt=(v,t,sel)=>`<option value="${v}"${sel?' selected':''}>${esc(t)}</option>`;
+  const c=info.current||{};
+  const d=await uiDialog({title:'抓取用哪个浏览器',okText:'切换',
+    html:`<div class="note">两个都是 Chromium 内核，抓取效果完全一样。选「自动」= Chrome 优先，本机没装 Chrome 时自动用 Edge。</div>
+      <label>浏览器</label>
+      <select name="browser">
+        ${opt('auto','自动（Chrome 优先，没有就用 Edge）',pref==='auto')}
+        ${avail.map(b=>opt(b.name,b.label+' · v'+b.version,pref===b.name)).join('')}
+      </select>
+      <div class="muted" style="margin-top:10px;line-height:1.7">
+        当前在用 <b>${esc(c.label||'无')}</b>${c.version?` v${esc(String(c.version))}`:''}<br>
+        程序：<code>${esc(c.exe||'')}</code><br>
+        登录态按浏览器分开存：换浏览器后需要重新扫一次码；Cookie 会自动迁移，多数情况不用重登。
+      </div>
+      ${info.env_locked?`<div class="note warn">环境变量 JOB_BROWSER 已锁定为 ${esc(info.env_locked)}，此处的切换只写配置，实际仍按环境变量走。</div>`:''}`});
+  if(!d.ok)return;
+  const want=(d.values&&d.values.browser)||'auto';
+  const r=await(await fetch('/api/browser',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({name:want})})).json();
+  toast(r.msg||(r.ok?'已切换':'切换失败'));
+  await loadBrowser().catch(()=>{});
+}
+
 /* ========== 视图 ========== */
 function switchView(v){
   curView=v;
@@ -905,6 +1450,10 @@ function switchView(v){
     el.classList.toggle('brand-active',k===v&&k==='jobs');
     document.getElementById('view-'+k).style.display=(k===v)?'':'none';
   });
+  // 深色 hero 是岗位统计条（在招数/薪资未知/已投递…），只在岗位列表有意义。
+  // 原来切到配置/看板时它还挂着，页面顶上顶着一排与当前页无关的大数字，很割裂。
+  const hp=document.querySelector('.hero');
+  if(hp)hp.style.display=(v==='jobs')?'':'none';
   if(v==='dash')loadStats();
   if(v==='replies')loadReplies();
 }
@@ -988,6 +1537,15 @@ async function syncCities(){
     const s=await(await fetch('/api/cities/sync_state')).json();
     document.getElementById('cityHint').textContent=s.running?'同步中…':(s.last||'');
     if(!s.running){clearInterval(t);if(s.count){await loadCities();toast('城市库已更新，共 '+s.count+' 个')}}
+  },1200);
+}
+async function syncLpCities(){
+  const r=await(await fetch('/api/liepin_cities/sync',{method:'POST'})).json();
+  toast(r.msg);if(!r.ok)return;
+  const t=setInterval(async()=>{
+    const s=await(await fetch('/api/liepin_cities/sync_state')).json();
+    if(!s.running){clearInterval(t);await loadLpCities();renderCityTags();
+      toast(s.count?('猎聘城市码已更新，共 '+s.count+' 个'):(s.last||'猎聘城市码同步完成'))}
   },1200);
 }
 
@@ -1269,11 +1827,14 @@ function closeLog(){clearInterval(logTimer);logTimer=null;document.getElementByI
 /* ========== 登录 / 风控 ========== */
 let loginTimer=null,repairTimer=null;
 const PLAT_NAME={boss:'BOSS',liepin:'猎聘'};
+// 登录态缓存：详情弹窗要据此提示「猎聘未登录，点开会跳登录页」，不用每次现拉接口
+let LP_LOGGED=false, BOSS_LOGGED=false;
 function paintLoginChip(p,st){
   const chip=document.getElementById(p==='boss'?'chipBoss':'chipLp');
   const dot=document.getElementById(p==='boss'?'dotLogin':'dotLp');
   const lb=document.getElementById(p==='boss'?'loginState':'loginLpState');
   if(!chip||!dot||!lb)return;
+  if(p==='liepin')LP_LOGGED=!!st.logged; else BOSS_LOGGED=!!st.logged;
   const busy=!!st.login_open;
   lb.textContent=busy?'登录中…':(st.logged?'已登录':'未登录');
   dot.className='dot '+(busy?'run':(st.logged?'ok':''));
@@ -1384,8 +1945,10 @@ function renderProfile(){
     return;
   }
   const core=new Set(PROF.core_skills||[]);
-  const chips=(PROF.skills||[]).map(s=>
-    `<span class="tag${core.has(s)?' tag-sal':''}" title="${core.has(s)?'核心技能':'技能'}">${esc(s)}</span>`).join(' ');
+  const allSkills=PROF.skills||[];
+  const coreList=allSkills.filter(s=>core.has(s));
+  const restList=allSkills.filter(s=>!core.has(s));
+  const chip=(s,hot)=>`<span class="tag${hot?' tag-sal':''}" title="${hot?'核心技能':'技能'}">${esc(s)}</span>`;
   const src=(PROF.source||'').startsWith('boss')?'BOSS 在线简历':(PROF.source||'').replace(/^upload:/,'上传：');
   box.innerHTML=`
     <div class="prof-meta">
@@ -1397,13 +1960,18 @@ function renderProfile(){
       <span>期望薪资 <b>${PROF.expect_salary||'?'}</b> K</span>
       <span>期望城市 <b>${esc((PROF.expect_cities||[]).join(' / ')||'—')}</b></span>
     </div>
-    <div class="prof-skills">${chips||'<span class="muted">未识别到技能</span>'}</div>
-    <div class="row2" style="margin-top:14px">
-      <div><label>期望月薪上限 K（可微调）</label><input type="number" id="profSalary" min="0" value="${PROF.expect_salary||0}"></div>
+    <div class="prof-skills">${
+      allSkills.length
+        ? (coreList.length?`<div class="prof-skillgroup"><div class="gl">核心技能<b>${coreList.length}</b></div><div class="tags">${coreList.map(s=>chip(s,true)).join('')}</div></div>`:'')
+          + (restList.length?`<div class="prof-skillgroup"><div class="gl">其他技能<b>${restList.length}</b></div><div class="tags">${restList.map(s=>chip(s,false)).join('')}</div></div>`:'')
+        : '<span class="muted">未识别到技能</span>'
+    }</div>
+    <div class="row2" style="margin-top:18px">
+      <div><label>期望月薪上限（K，可微调）</label><input type="number" id="profSalary" min="0" value="${PROF.expect_salary||0}"></div>
       <div><label>我的学历（可微调）</label>
         <select id="profDegree">${DEG_CHOICES.map(d=>`<option value="${d}" ${d===(PROF.degree||'')?'selected':''}>${d||'不设置'}</option>`).join('')}</select></div>
     </div>
-    <div style="margin-top:10px;display:flex;gap:10px;align-items:center">
+    <div style="margin-top:14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
       <button class="btn btn-sm" onclick="patchProfile()">保存微调并重算</button>
       <span class="muted">技能始终来自简历解析，不支持手填</span>
     </div>`;
@@ -1493,49 +2061,60 @@ async function refreshReplyBadge(){
   try{
     const d=await(await fetch('/api/replies?limit=1')).json();
     const b=document.getElementById('navReplyBadge');
-    if(d.total>0){b.style.display='';b.textContent=d.total}else{b.style.display='none'}
+    // 徽标显示「已回复」条数（不是投递总数——投递量会很大，徽标就没意义了）
+    const n=d.replied||0;
+    if(n>0){b.style.display='';b.textContent=n}else{b.style.display='none'}
   }catch(e){}
 }
 async function loadReplies(){
   const box=document.getElementById('replyBody');
-  box.innerHTML='<tr><td colspan="8" class="empty">加载中…</td></tr>';
+  box.innerHTML=skRows(8,5);   /* 骨架行：列数与表头一致，加载完柔和替换 */
   let d={};
   try{d=await(await fetch('/api/replies?limit=300')).json()}catch(e){
-    box.innerHTML='<tr><td colspan="8" class="empty">读取失败</td></tr>';return}
+    box.innerHTML='<tr><td colspan="8" class="empty">读取失败，点右上角「刷新」重试</td></tr>';return}
   REPLY_CACHE={};(d.rows||[]).forEach(r=>REPLY_CACHE[r.job_id]=r);
   const s=d.sync||{};
   document.getElementById('replyKpis').innerHTML=`
-    <div class="dk"><div class="lb">已回复</div><b>${d.total||0}</b><div class="dt">收到 HR 消息的岗位</div></div>
-    <div class="dk"><div class="lb">已投递</div><b>${d.applied||0}</b><div class="dt">其中走过投递流程</div></div>
-    <div class="dk"><div class="lb">仍在招</div><b>${d.active||0}</b><div class="dt">岗位未下线</div></div>
-    <div class="dk"><div class="lb">上次同步</div><b style="font-size:22px">${s.running?'同步中…':esc(s.at||'未同步')}</b>
+    <div class="dk"><div class="lb">已投递</div><b>${d.total||0}</b><div class="dt">投过就显示，不用等回复</div></div>
+    <div class="dk"><div class="lb">等待回复</div><b style="color:#b45309">${d.waiting||0}</b><div class="dt">已投递、HR 还没回</div></div>
+    <div class="dk"><div class="lb">已回复</div><b style="color:#2b8a3e">${d.replied||0}</b><div class="dt">收到 HR 消息</div></div>
+    <div class="dk"><div class="lb">上次同步</div><b style="font-size:22px">${s.running?'同步中…':esc((s.at||'未同步').slice(5,16))}</b>
       <div class="dt" title="${esc(s.last||'')}">${s.running?'正在读取 BOSS 会话':esc((s.last||'点右上角「同步 BOSS 会话」').slice(0,30))}</div></div>`;
   const lpRows=(d.rows||[]).filter(r=>r.source==='liepin').length;
   document.getElementById('replyHint').innerHTML=
-    '<b>自动同步只支持 BOSS</b>：靠「BOSS 会话列表里出现该公司名」判断，公司名对不上会漏判，漏了可在岗位详情手动「标记 HR 已回复」；同步只读取，不会给 HR 发任何消息。<br>'
-    +'<b>猎聘没有自动同步</b>：猎聘聊天记录在猎聘站内 IM，需要登录态调它的私有接口，本工具不接入 —— 猎聘岗位请用岗位详情的「标记 HR 已回复」手动维护'
-    +(lpRows?`（当前有 ${lpRows} 条猎聘岗位是手动标记的）`:'')+'。';
+    '<b>投递过就会出现在这里</b>：未回复的标「等待回复」（右侧时间是你的投递时间，方便看投了多久没动静），HR 回复后自动变「已回复」。<br>'
+    +'<b>自动同步只支持 BOSS</b>：靠「BOSS 会话列表里出现该公司名」判断，公司名对不上会漏判，漏了可点「标记已回复」手动补；同步只读取，不会给 HR 发任何消息。'
+    +'<b>猎聘没有自动同步</b>：聊天记录在猎聘站内 IM，需登录态调私有接口，本工具不接入 —— 猎聘岗位请手动标记'
+    +(lpRows?`（当前有 ${lpRows} 条猎聘岗位在列表中）`:'')+'。';
   if(!(d.rows||[]).length){
-    box.innerHTML='<tr><td colspan="8" class="empty">还没有 HR 回复记录。点右上角「同步 BOSS 会话」读取一次。</td></tr>';
+    box.innerHTML='<tr><td colspan="8" class="empty">还没有投递记录。投过一条岗位后就会出现在这里，标记为「等待回复」，HR 回复后再变成「已回复」。</td></tr>';
     return;
   }
   box.innerHTML=d.rows.map(r=>{
-    const st=r.status==='offline'?'<span class="tag tag-off">已下线</span>'
-      :(r.applied===1?'<span class="tag tag-applied">已投递</span>':'<span class="tag">未投递</span>');
+    const replied=r.replied===1;
+    // 状态列：投递即显示。已回复 > 等待回复 > 岗位下线（未回复且下线）
+    const st = replied
+      ? '<span class="tag tag-new">已回复</span>'
+      : (r.status==='offline'
+          ? '<span class="tag tag-off">等待回复·已下线</span>'
+          : '<span class="tag" style="background:#fffaf0;border-color:#f0c36d;color:#b45309">等待回复</span>');
     const score=r.match_score||0;
     const cls=score>=60?'tag-sal':(score>=40?'':'');
     const isLp=r.source==='liepin';
     const platTag=platIcon(r.source,'lg');
+    // 时间列：已回复显示回复时间，未回复显示投递时间（让「投了多久没动静」一眼可见）
+    const tRaw = replied ? (r.reply_at||'') : (r.applied_at||firstSeenOf(r));
+    const tLabel = replied ? '回复' : '投递';
     return `<tr>
       <td>${platTag}<b>${esc(r.company||'')}</b><div class="muted">${esc(locText(r.city_name,r.area_district))}</div></td>
       <td><a href="${esc(r.job_url||'#')}" target="_blank">${esc(r.job_name||'')}</a></td>
       <td>${r.salary?`<span class="tag tag-sal">${esc(r.salary)}</span>`:'<span class="muted">未知</span>'}</td>
       <td><span class="tag ${cls}" title="基于简历画像">${score}</span></td>
-      <td class="muted">${esc((r.reply_at||'').slice(5,16)||'—')}</td>
+      <td class="muted" title="${esc(tLabel)}时间">${esc((tRaw||'').slice(5,16)||'—')}</td>
       <td class="reply-note" title="${esc(r.reply_note||'')}">${esc((r.reply_note||'').slice(0,42)||'—')}</td>
       <td>${st}</td>
       <td style="white-space:nowrap">
-        <select style="height:32px;width:104px;border:1px solid var(--hairline-strong);font-size:12px" title="标记求职阶段"
+        <select style="height:var(--ctl-h-sm);width:104px;border:1px solid var(--hairline-strong);font-size:12px" title="标记求职阶段"
           onchange="setStageQuick('${esc(r.job_id)}',this.value)">
           <option value="">— 选阶段 —</option>
           <option value="interview" ${r.stage==='interview'?'selected':''}>面试中</option>
@@ -1546,9 +2125,13 @@ async function loadReplies(){
         ${isLp
           ?`<a class="btn btn-sm" href="${esc(r.job_url||'https://www.liepin.com/zhaopin/')}" target="_blank" style="text-decoration:none" title="猎聘不支持消息同步，去官网沟通">去猎聘</a>`
           :'<a class="btn btn-sm" href="https://www.zhipin.com/web/geek/chat" target="_blank" style="text-decoration:none">去聊天</a>'}
-        <button class="btn btn-sm" onclick="setReplied('${esc(r.job_id)}',false)">取消标记</button>
+        ${replied
+          ? `<button class="btn btn-sm" onclick="setReplied('${esc(r.job_id)}',false)" title="取消「已回复」标记">撤销已回复</button>`
+          : `<button class="btn btn-sm" onclick="setReplied('${esc(r.job_id)}',true)" title="HR 已在站内回复过了，手动标记">标记已回复</button>`}
       </td></tr>`}).join('');
 }
+/* 兜底：没有 applied_at 的老数据用 first_seen */
+function firstSeenOf(r){ return (r.first_seen||'').replace('T',' '); }
 async function setStageQuick(jid, val){
   const stage = (val==='clear') ? '' : val;
   try{
@@ -1595,6 +2178,18 @@ function toggleMore(force){
   try{localStorage.setItem('fMoreOpen',open?'1':'0')}catch(e){}
 }
 function filterQuery(){const o=readFilters();return Object.keys(o).map(k=>k+'='+encodeURIComponent(o[k])).join('&')}
+/* 误杀回滚：抓取不完整（翻页变浅/风控截断）导致在招岗位被判下线时，一键恢复 */
+async function undoOffline(){
+  if(!confirm('把最近 24 小时内被判「已下线」的岗位恢复为在招？（抓取不完整导致误杀时用）'))return;
+  try{
+    let r=await(await fetch('/api/offline/recover?hours=24',{method:'POST'})).json();
+    if(!r.count&&confirm('最近 24 小时内没有下线记录。\n要恢复全部「已下线」岗位吗？\n（更早的数据没记下线时间，只能整体恢复；下次抓取会按新规则重新判定）')){
+      r=await(await fetch('/api/offline/recover?hours=0',{method:'POST'})).json();
+    }
+    toast(r.msg||('已恢复 '+r.count+' 条'));
+    if(r.count)loadJobs(1);
+  }catch(e){toast('恢复失败：'+e)}
+}
 function renderChips(){
   const o=readFilters(),box=document.getElementById('filterChips'),chips=[];
   FF.forEach(([id,k,label])=>{
@@ -1670,6 +2265,9 @@ function _daysSince(ts){
 async function loadJobs(p){
   curPage=Math.max(1,p||1);
   const ps=50;
+  const tb=document.getElementById('jobsBody');
+  // 只有「首屏还没有任何真实行」时才铺骨架；翻页/筛选保留旧内容，避免每次闪烁
+  if(tb && !tb.querySelector('tr[data-jid]')) tb.innerHTML=skRows(12,7);
   const d=await(await fetch(`/api/jobs?page=${curPage}&size=${ps}&`+filterQuery())).json();
   document.getElementById('totalHint').textContent=`共 ${d.total} 条`;
   document.getElementById('jobsBody').innerHTML=d.rows.map(j=>{
@@ -1698,16 +2296,17 @@ async function loadJobs(p){
       : '<span class="muted">无</span>';
     const dup=j.dup_count>1?`<span class="tag" title="同公司同岗位有多条">同岗 ${j.dup_count}</span>`:'';
     const score=j.match_score||0;
-    const isLp=(j.source||'boss')==='liepin';
+    // 平台判定同详情弹窗：域名优先，source 兜底（防止字段缺失时把猎聘行画成 BOSS）
+    const isLp=(j.source==='liepin')||/liepin\.com/i.test(String(j.job_url||''));
     const act=`<button class="star ${j.starred?'on':''}" title="${j.starred?'取消收藏':'收藏'}"
         onclick="toggleStar('${esc(j.job_id)}',${j.starred?0:1})">★</button>`+
       (j.status==='offline'?'<span class="muted">已下线</span>'
         :isLp?`<a class="btn btn-sm" href="${esc(j.job_url)}" target="_blank" style="text-decoration:none" title="猎聘岗位请到官网手动投递">去官网</a>`
           :(j.applied===1?'<span class="muted">已投</span>'
           :`<button class="btn btn-sm" onclick="applyOne('${esc(j.job_id)}')">投递</button>`));
-    return `<tr class="${sel.has(j.job_id)?'sel':''}">
+    return `<tr class="${sel.has(j.job_id)?'sel':''}" data-jid="${esc(j.job_id)}">
       <td><input type="checkbox" data-jid="${esc(j.job_id)}" ${sel.has(j.job_id)?'checked':''} ${j.status==='offline'?'disabled':''} onchange="toggleSel(this)"></td>
-      <td class="plat">${platIcon(j.source)}</td>
+      <td class="plat">${platIcon(isLp?'liepin':'boss')}</td>
       <td><a class="job-title" onclick="openJob('${esc(j.job_id)}')" title="点击查看详情（备注 / 求职阶段 / 完整描述）">${esc(j.job_name)}</a><a class="ext" href="${esc(j.job_url)}" target="_blank" title="到原网站打开该岗位" onclick="event.stopPropagation()">↗</a> ${dup}<div class="muted">${esc(j.keyword||'')}${j.industry?' / '+esc(j.industry):''}</div></td>
       <td>${j.salary?`<span class="tag tag-sal">${esc(j.salary)}</span>`:'<span class="muted">未知</span>'}</td>
       <td><span class="score ${score>=70?'hi':''}" title="本地规则打分：技能命中 / 薪资 / 学历">${score}</span></td>
@@ -1754,21 +2353,82 @@ function toggleAll(cb){
 function clearSel(){sel.clear();loadJobs(curPage)}
 
 /* ========== 详情 ========== */
-async function openJob(jid){
-  let j=JOB_CACHE[jid];
-  if(!j){
-    // 单条读取：之前是拉 200 条再本地 find，第 3 页之后的岗位会静默点不开
-    try{const d=await(await fetch('/api/job?job_id='+encodeURIComponent(jid))).json();j=d.job}catch(e){}
+/* ========== 加载反馈：骨架屏四态状态机 ==========
+   idle(未请求) / loading(骨架) / success(内容，650ms 柔和替换) / error(保留上下文+可重试)
+   只用 opacity/transform；prefers-reduced-motion 下由 CSS 关闭扫光与过渡。 */
+/* 表格骨架行：列数按真实表头给，宽度按列位置模拟（首列长、数字列短） */
+function skRows(cols, n){
+  let html='';
+  for(let i=0;i<(n||6);i++){
+    let tds='';
+    for(let c=0;c<cols;c++){
+      const w = c===0 ? '86%' : (c===1 ? '72%' : (c%3===0 ? '46%' : '58%'));
+      tds += `<td><span class="sk sk-line" style="width:${w};margin:0"></span></td>`;
+    }
+    html += `<tr class="sk-tr">${tds}</tr>`;
   }
-  if(!j){toast('岗位信息读取失败，刷新页面后再试');return}
+  return html;
+}
+function setJobState(state, msg){
+  const sk=document.getElementById('jobSkeleton');
+  const ct=document.getElementById('jobContent');
+  const er=document.getElementById('jobError');
+  if(!sk||!ct||!er)return;
+  if(state==='loading'){
+    er.style.display='none';
+    ct.style.display='none'; ct.classList.remove('in');
+    sk.style.display='';
+    const st=document.getElementById('jobSkStatus');
+    if(st){st.className='sk-status';st.textContent='正在读取岗位信息…'}
+  }else if(state==='error'){
+    sk.style.display='none';
+    ct.style.display='none';
+    er.style.display='';
+    const m=document.getElementById('jobErrMsg'); if(m)m.textContent=msg||'网络或接口异常';
+    try{document.getElementById('jobRetry').focus()}catch(e){}   /* 键盘可直接回车重试 */
+  }else{ // success：柔和替换（骨架直接撤，内容 650ms 淡入+归位）
+    sk.style.display='none';
+    er.style.display='none';
+    ct.style.display='';
+    ct.classList.add('in');
+    requestAnimationFrame(()=>requestAnimationFrame(()=>{ ct.classList.remove('in'); }));
+  }
+}
+async function openJob(jid){
   curJobId=jid;
+  // 关键：先开弹窗给反馈，再决定「有缓存直接渲染」还是「先骨架后加载」
+  // （旧逻辑是 fetch 完才弹窗，缓存未命中时点了几百毫秒完全没反应）
+  document.getElementById('jobMask').classList.add('show');
+  const cached=JOB_CACHE[jid];
+  if(cached){ renderJob(cached); return }
+  setJobState('loading');
+  try{
+    const r=await fetch('/api/job?job_id='+encodeURIComponent(jid));
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const d=await r.json();
+    if(!d||!d.job)throw new Error('接口返回为空');
+    JOB_CACHE[jid]=d.job;
+    renderJob(d.job);
+  }catch(e){
+    setJobState('error', String((e&&e.message)||e).slice(0,80));
+  }
+}
+function retryOpenJob(){ if(curJobId)openJob(curJobId) }
+function renderJob(j){
+  // 平台判定放在最前面：后面的标签、文案、按钮全都要用。
+  // 以**链接域名**为准，source 只作兜底 —— 只信 source 的话，一旦字段丢失/被同岗合并覆盖，
+  // 文案就退回「在 BOSS 打开」（2026-10-26 用户踩过）；域名是硬证据，骗不了人。
+  const _url=String(j.job_url||'');
+  const _isLp=(j.source==='liepin')||/liepin\.com/i.test(_url);
   document.getElementById('jobTitle').textContent=j.job_name||'无标题';
   document.getElementById('jobMeta').innerHTML=[
-    `${platIcon(j.source,'lg')}<span class="muted">${(j.source||'boss')==='liepin'?'猎聘':'BOSS直聘'}</span>`,
+    `${platIcon(_isLp?'liepin':'boss','lg')}<span class="muted">${_isLp?'猎聘':'BOSS直聘'}</span>`,
     j.salary?`<span class="tag tag-sal">${esc(j.salary)}</span>`:'<span class="muted">薪资未知</span>',
     esc(j.company||''),
     (j.company||'').startsWith('某')
       ?'<span class="tag tag-off" title="猎聘对猎头代招职位做了脱敏，真实雇主名平台不公开">保密雇主</span>':'',
+    (_isLp&&!LP_LOGGED)
+      ?'<span class="tag tag-off" title="猎聘登录态已失效：打开岗位页会被跳到登录/中转页，JD 也抓不到。点顶部「猎聘」胶囊重新登录一次就好">猎聘未登录</span>':'',
     esc(locText(j.city_name,j.area_district)),
     j.lng?`<a class="maplink" onclick="openMap('${esc(j.job_id)}')">📍 公司位置</a>`:'',
     esc(j.experience||''),esc(j.degree||''),esc(j.scale||''),
@@ -1777,11 +2437,23 @@ async function openJob(jid){
     (j.proxy_job===1?'<span class="tag tag-off">代招</span>':'')+(j.gold_hunter===1?'<span class="tag tag-off">猎头</span>':''),
     j.status==='offline'?'<span class="tag tag-off">已下线</span>':''
   ].filter(Boolean).join(' <span style="color:var(--hairline-strong)">|</span> ');
-  document.getElementById('jobDesc').textContent=j.detail_text||'暂无职位描述，可用「补抓描述」补全';
+  document.getElementById('jobDesc').textContent=j.detail_text||(_isLp
+    ?'猎聘详情页要登录猎聘才读得到（未登录时平台会跳登录页），所以猎聘 JD 常为空。点下方「在猎聘打开」自己看，或用「补抓描述」在猎聘登录后再试。'
+    :'暂无职位描述，可用「补抓描述」补全');
   document.getElementById('jobNote').value=j.note||'';
-  document.getElementById('jobOpen').href=j.job_url||'#';
+  const openA=document.getElementById('jobOpen');
+  if(_url&&_url!=='#'){
+    openA.style.display='';
+    openA.href=_url;
+    openA.textContent=_isLp?'在猎聘打开':'在 BOSS 打开';
+    openA.title=_isLp
+      ? `在猎聘官网打开该岗位（${_url}）${LP_LOGGED?'':'\n注意：猎聘当前未登录，详情页可能被跳到登录/中转页'}`
+      : `在 BOSS 直聘打开该岗位（${_url}）`;
+  }else{
+    openA.style.display='none';
+    openA.removeAttribute('href');
+  }
   const b=document.getElementById('jobApplyBtn');
-  const _isLp=(j.source||'boss')==='liepin';
   b.disabled=_isLp||j.applied===1||j.status==='offline';
   b.textContent=_isLp?'猎聘请到官网投递':(j.applied===1?'已投递过':(j.status==='offline'?'岗位已下线':'投递这个岗位'));
   const rb=document.getElementById('jobReplyBtn');
@@ -1791,7 +2463,7 @@ async function openJob(jid){
   document.getElementById('jobStageNote').value=j.stage_note||'';
   document.getElementById('jobNextAt').value=(j.next_at||'').replace(' ','T').slice(0,16);
   document.getElementById('jobNextNote').value=j.next_note||'';
-  document.getElementById('jobMask').classList.add('show');
+  setJobState('success');
   document.getElementById('jobDesc').scrollTop=0;
 }
 async function saveNextAt(){
@@ -1897,6 +2569,27 @@ async function applySelected(){
   const r=await(await fetch('/api/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_ids:ids})})).json();
   toast(r.msg);if(r.ok){applyRunning=true;pollApply()}
 }
+/* 一键重投：把投递失败的岗位重新排队（登录失效/风控/按钮没找到，岗位本身没下架的都能重来） */
+async function retryFailed(){
+  if(applyRunning){toast('投递进行中');return}
+  const n=+(document.getElementById('retryFailN').dataset.n||0);
+  if(!n){toast('当前没有投递失败的岗位');return}
+  const d=await uiDialog({title:'重新投递失败的岗位',okText:`重投 ${n} 条`,danger:true,
+    html:`<div class="note warn">会真实向 HR 发起打招呼，无法撤回。</div>
+      <p>共 ${n} 条投递失败的岗位将重新排队（单批上限按配置截取）。</p>
+      <ul><li>登录失效/风控导致的失败也能重投</li><li>岗位确实已下架的不建议重投（会再次失败）</li></ul>`});
+  if(!d.ok)return;
+  const r=await(await fetch('/api/apply_retry',{method:'POST'})).json();
+  toast(r.msg);if(r.ok){applyRunning=true;pollApply()}
+}
+/* 刷新「重投失败 N」徽标：从 /api/counts 拿失败数 */
+async function refreshRetryBadge(){
+  try{
+    const c=await(await fetch('/api/counts')).json();
+    const el=document.getElementById('retryFailN');
+    if(el){el.textContent=c.apply_failed?('· '+c.apply_failed):'';el.dataset.n=c.apply_failed||0}
+  }catch(e){}
+}
 async function applyOne(jid){
   if(applyRunning){toast('投递进行中');return}
   const d=await uiDialog({title:'确认投递',okText:'投递',danger:true,
@@ -1917,13 +2610,16 @@ function pollApply(){
     document.getElementById('btnApply').disabled=s.running;
     if(s.running){applyRunning=true;setRunState('投递中','run')}
     else{applyRunning=false;clearInterval(applyTimer);document.getElementById('btnApply').disabled=false;
-      setRunState('空闲','ok');loadJobs(curPage);loadApps();getLoginState()}
+      setRunState('空闲','ok');loadJobs(curPage);loadApps();getLoginState();refreshRetryBadge();
+      refreshReplyBadge();if(curView==='replies')loadReplies()}
   },3000);
 }
 async function stopApply(){const r=await(await fetch('/api/apply_cancel',{method:'POST'})).json();toast(r.msg)}
 async function loadApps(){
+  const body=document.getElementById('appsBody');
+  if(body && !body.querySelector('td:not(.empty)')) body.innerHTML=skRows(4,3);
   const d=await(await fetch('/api/applications?limit=20')).json();
-  document.getElementById('appsBody').innerHTML=(d.apps||[]).map(a=>`<tr>
+  body.innerHTML=(d.apps||[]).map(a=>`<tr>
     <td class="muted">${esc((a.created_at||'').slice(5,16))}</td>
     <td>${esc(a.job_name)}<div class="muted">${esc(a.company||'')}</div></td>
     <td>${a.status==='success'?'<span class="tag tag-new">成功</span>':'<span class="tag tag-fail">失败</span>'}</td>
@@ -2057,6 +2753,46 @@ async function loadSkillGap(){
     <div><div class="gtitle warn">岗位要 · 我缺</div>${gapRows(d.gap||[])}</div>
   </div>`;
 }
+/* ========== 技能薪资分析 ========== */
+let skillSalKey='jobs';
+function ssalSort(list,key){
+  const a=list.slice();
+  if(key==='jobs')a.sort((x,y)=>y.jobs-x.jobs);
+  else if(key==='premium')a.sort((x,y)=>(y.premium??-999)-(x.premium??-999));
+  else a.sort((x,y)=>(y.lift??0)-(x.lift??0));
+  return a;
+}
+async function loadSkillSalary(){
+  const box=document.getElementById('dashSkillSal');if(!box)return;
+  let d={skills:[]};
+  try{d=await(await fetch('/api/skills/salary'+(dashSource?'?source='+dashSource:''))).json()}catch(e){}
+  const note=document.getElementById('dashSkillSalNote');
+  if(note){
+    note.textContent=d.total?
+      `基于 ${d.known||0} 条有薪资在招岗 ｜ 高薪线 = 薪资≥${d.high_threshold}K（全体 P75）｜ 溢价 = 要求该技能 vs 不要求的薪资中位数差（相关性，非因果）`:'';
+  }
+  const list=ssalSort(d.skills||[],skillSalKey).slice(0,12);
+  if(!list.length){box.innerHTML='<div class="muted" style="padding:8px 0">样本不足（至少 5 个岗位提到同一技能才有统计意义）</div>';return}
+  const maxBar=Math.max(1,...list.map(x=>skillSalKey==='jobs'?x.jobs:(x.premium??0)));
+  box.innerHTML=`<table class="ssal"><thead><tr>
+      <th>技能</th><th>岗位数</th>${skillSalKey==='jobs'?'<th></th>':'<th>溢价</th>'}<th>薪资中位</th><th>高薪岗出现率</th><th title="高薪岗出现率 ÷ 整体出现率，>1 表示高薪岗更看重">偏好度</th>
+    </tr></thead><tbody>
+    ${list.map(x=>{
+      const pos=(x.premium??0)>=0;
+      const barW=skillSalKey==='jobs'?Math.max(3,Math.round(x.jobs*140/maxBar)):Math.max(3,Math.round(Math.abs(x.premium??0)*140/maxBar));
+      return `<tr title="${esc(x.skill)}：${x.jobs} 个岗位（${x.pct}%），薪资中位 ${x.salary}K，不要求的对照 ${x.base}K">
+      <td class="sk">${esc(x.skill)}</td>
+      <td>${x.jobs}</td>
+      <td>${skillSalKey==='jobs'
+        ?`<span class="bar"><i style="width:${barW}px"></i></span>`
+        :`<span class="bar"><i class="${pos?'pos':'neg'}" style="width:${barW}px"></i></span>
+          <span class="pm ${pos?'pos':'neg'}">${pos?'+':''}${x.premium}K</span>`}</td>
+      <td>${x.salary??'—'}K</td>
+      <td>${x.high_rate}%</td>
+      <td class="lift">${x.lift?('×'+x.lift):'—'}</td></tr>`;
+    }).join('')}
+    </tbody></table>`;
+}
 async function loadConv(){
   const box=document.getElementById('dashConv');if(!box)return;
   let d={rows:[]};
@@ -2120,7 +2856,7 @@ async function loadStats(){
   document.getElementById('dkDescSub').textContent=
     `已有 ${s.desc_done} 条，待补 ${s.total-s.desc_done} 条`+
     (s.proxy?` ｜ 代招 ${s.proxy}`:'');
-  loadSkillGap();loadConv();loadSchedule();
+  loadSkillGap();loadSkillSalary();loadConv();loadSchedule();
   renderDashMap();
 }
 function bindSeg(){
@@ -2144,6 +2880,14 @@ function bindSeg(){
       convBy=b.dataset.by||'source';
       document.querySelectorAll('#segConv button').forEach(x=>x.classList.toggle('on',x===b));
       loadConv();
+    };
+  });
+  // 技能薪资分析：需求热度 / 薪资溢价 / 高薪偏好
+  document.querySelectorAll('#segSkillSal button').forEach(b=>{
+    b.onclick=()=>{
+      skillSalKey=b.dataset.k||'jobs';
+      document.querySelectorAll('#segSkillSal button').forEach(x=>x.classList.toggle('on',x===b));
+      loadSkillSalary();
     };
   });
 }
@@ -2278,24 +3022,33 @@ function bindMapSeg(){
 
 /* ========== 启动 ========== */
 (async()=>{
+  // 启动链加固：任何一步接口卡死/报错，都不能阻断后面的初始化。
+  // 曾经的坑：/api/applications 被数据库锁挂住 → await 永久 pending →
+  // 登录态不刷新（一直显示未登录）+ 弹窗关闭事件不绑定（日志弹窗关不掉）。
+  const safe=f=>Promise.resolve().then(f).catch(e=>console.warn('[boot] step skipped:',e));
   bindCityPicker();
   bindSeg();
   bindMapSeg();
-  await loadLpCities();
+  await safe(()=>loadLpCities());
   // 更多筛选：恢复上次展开状态 + 下拉改动即生效
   try{if(localStorage.getItem('fMoreOpen')==='1')toggleMore(true)}catch(e){}
   const fm=document.getElementById('fMore');
   if(fm)fm.addEventListener('change',e=>{if(e.target&&e.target.tagName==='SELECT')applyFilters()});
-  await loadCities();
-  await loadConfig();
-  await refreshFilters();
-  await loadJobs(1);
-  await refreshReplyBadge();
-  await loadRuns();
-  await loadApps();
-  await getLoginState();
-  await getLpLoginState();
-  await refreshRisk();
+  await safe(()=>loadCities());
+  await safe(()=>loadConfig());
+  await safe(()=>refreshFilters());
+  await safe(()=>loadJobs(1));
+  await safe(()=>refreshRetryBadge());
+  await safe(()=>refreshReplyBadge());
+  await safe(()=>loadRuns());
+  await safe(()=>loadApps());
+  await safe(()=>getLoginState());
+  await safe(()=>getLpLoginState());
+  await safe(()=>loadBrowser());
+  await safe(()=>loadTunnel());
+  // 隧道可能中途开/关，定期刷新状态（接口只读本地文件 + 一次 tasklist，很轻）
+  setInterval(()=>{if(!document.hidden)safe(()=>loadTunnel())},30000);
+  await safe(()=>refreshRisk());
   setInterval(refreshRisk,15000);
   document.getElementById('logClose').onclick=closeLog;
   document.getElementById('logMask').onclick=e=>{if(e.target.id==='logMask')closeLog()};
@@ -2313,15 +3066,16 @@ function bindMapSeg(){
     if(vis('progMask')){hideProgress();return}
   };
   const cc=document.getElementById('cfgCard');
-  cc.addEventListener('input',markDirty);cc.addEventListener('change',e=>{markDirty();
+  if(cc){cc.addEventListener('input',markDirty);cc.addEventListener('change',e=>{markDirty();
     if(e.target&&(e.target.id==='cfgBossEnabled'||e.target.id==='cfgLiepinEnabled'||e.target.id==='cfgLiepinPages')){
       PLAT_STATE=enabledPlatsFrom(cfgBossEnabled.value,cfgLiepinEnabled.value);
-      LP_PAGES=+cfgLiepinPages.value||2;renderPlatSummary();platWarnHint();updateCrawlHint();}});
-  const ds=await(await fetch('/api/details_status')).json();if(ds.running)pollDetails();
-  const st=await(await fetch('/api/status')).json();
+      LP_PAGES=+cfgLiepinPages.value||2;renderPlatSummary();platWarnHint();updateCrawlHint();}});}
+  const ds=await safe(async()=>{const r=await(await fetch('/api/details_status')).json();if(r.running)pollDetails();});
+  const st=await safe(async()=>(await fetch('/api/status')).json())||{};
   // 刷新/重开页面时若还在抓取：直接接管进度（胶囊常驻，点它可打开弹窗）
   if(st.running){clearInterval(progTimer);progTimer=setInterval(tickProgress,1200);tickProgress();pollStatus();}
-  const ap=await(await fetch('/api/apply_status')).json();if(ap.running){applyRunning=true;pollApply()}
+  const ap=await safe(async()=>(await fetch('/api/apply_status')).json())||{};
+  if(ap.running){applyRunning=true;pollApply()}
 })();
 </script>
 </body>

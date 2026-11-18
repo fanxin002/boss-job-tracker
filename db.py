@@ -6,14 +6,16 @@ import os
 import re
 import sqlite3
 import threading
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(BASE_DIR, "data")
+from runtime_paths import DATA_DIR, bootstrap_seed_files
 os.makedirs(DATA_DIR, exist_ok=True)
+bootstrap_seed_files()
 DB_PATH = os.path.join(DATA_DIR, "jobs.db")
 
-_lock = threading.Lock()
+_lock = threading.RLock()
 
 DEFAULT_CONFIG = {
     "keywords": "数据分析",
@@ -81,7 +83,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     gold_hunter INTEGER DEFAULT 0,           -- 是否猎头发布
     encrypt_brand_id TEXT,                   -- 公司加密ID（同公司聚合用）
     boss_avatar TEXT,                        -- HR 头像 URL
-    source TEXT DEFAULT 'boss'               -- 数据来源平台：boss / liepin
+    source TEXT DEFAULT 'boss',              -- 数据来源平台：boss / liepin
+    miss_count INTEGER DEFAULT 0,            -- 连续「本轮没再出现」的次数（≥阈值才判下线）
+    offline_at TEXT                          -- 判下线的时间（用于误杀后一键撤销）
 );
 CREATE TABLE IF NOT EXISTS runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -163,7 +167,7 @@ INSERT INTO jobs ({",".join(COLS)}) VALUES ({",".join("?" * len(COLS))})
 ON CONFLICT(job_id) DO UPDATE SET
     lid=excluded.lid, security_id=excluded.security_id,
     last_seen=excluded.last_seen, last_run_id=excluded.last_run_id,
-    is_new=0, status='active',
+    is_new=0, status='active', miss_count=0, offline_at=NULL,
     salary=CASE WHEN excluded.salary<>'' THEN excluded.salary ELSE jobs.salary END,
     salary_min=CASE WHEN excluded.salary_min IS NOT NULL THEN excluded.salary_min ELSE jobs.salary_min END,
     salary_max=CASE WHEN excluded.salary_max IS NOT NULL THEN excluded.salary_max ELSE jobs.salary_max END,
@@ -212,6 +216,8 @@ def _migrate(c):
                      ("coord_approx", "INTEGER DEFAULT 0"),
                      # 跟进日程：下次面试/沟通时间与备注
                      ("next_at", "TEXT"), ("next_note", "TEXT"),
+                     # 下线判定：连续未出现次数（防误杀）+ 判下线时间（误杀可撤销）
+                     ("miss_count", "INTEGER DEFAULT 0"), ("offline_at", "TEXT"),
                      # 跨平台同岗合并键（公司名+岗位名归一后）
                      ("dedupe_key", "TEXT")]:
         if col not in cols:
@@ -350,31 +356,94 @@ def upsert_jobs(rows, run_id):
     return new_cnt, seen
 
 
-def mark_offline(covered_pairs, run_job_ids, source="boss"):
-    """本次健康覆盖的 (keyword, city_code) 范围内：
-    - 未再出现的 active 岗位 → 标记下线
-    - 范围内本轮未触及的岗位 → 清掉 is_new（新增=本轮首次出现）
-    source 隔离：猎聘轮的下线判定不会误伤 BOSS 的行（反之亦然）"""
+def mark_offline(covered_pairs, run_job_ids, source="boss", min_miss=2,
+                 coverage=0.6, log=None):
+    """本次覆盖的 (keyword, city_code) 范围内判定下线。
+
+    防误杀三道闸（岗位在官网还活着却被判下线，基本都是这三类原因）：
+      1) 覆盖率闸：本轮在该范围内重新命中的岗位数 < 该范围活跃数的 coverage 比例
+         （默认 60%），说明这次抓取不完整（翻页变浅 / 排序变了 / 被风控截断），
+         整段范围跳过判定——宁可漏判，不可误杀。
+      2) 连续未出现闸：miss_count 累加，只有连续 min_miss 轮（默认 2 轮）都没再
+         出现才判下线。BOSS 同条件的排序会浮动，单轮落榜很常见。
+      3) source 隔离：猎聘轮的下线判定不会误伤 BOSS 的行（反之亦然）。
+    """
+    def _log(msg):
+        if log:
+            try:
+                log(msg)
+            except Exception:
+                pass
+
     offline = 0
     ids = list(run_job_ids)
     if not ids:
         return 0
+    ph = ",".join("?" * len(ids))
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    _t0 = time.time()
+    # 诊断日志：这个函数曾经无声卡死过 10 分钟（run 29），进入/每个范围/退出都留痕
+    _log(f"🔍 下线判定开始：{len(covered_pairs)} 个范围 ｜ 本轮 {len(ids)} 个岗位ID")
     with _lock:
         c = conn()
-        placeholders = ",".join("?" * len(ids))
         for kw, cc in covered_pairs:
+            scope = "keyword=? AND city_code=? AND source=?"
+            sp = [kw, cc, source]
+            active_before = c.execute(
+                f"SELECT COUNT(*) n FROM jobs WHERE {scope} AND status='active'", sp
+            ).fetchone()["n"]
+            if active_before == 0:
+                continue
+            seen_here = c.execute(
+                f"SELECT COUNT(*) n FROM jobs WHERE {scope} AND status='active' "
+                f"AND job_id IN ({ph})", sp + ids).fetchone()["n"]
+            if seen_here == 0:
+                _log(f"⚠️ 「{kw}」@ {cc} 本轮没抓到任何已存岗位，跳过下线判定"
+                     f"（抓取不完整，避免误杀）")
+                continue
+            if seen_here < active_before * coverage:
+                _log(f"⚠️ 「{kw}」@ {cc} 本轮只重新命中 {seen_here}/{active_before} 条"
+                     f"（<{int(coverage*100)}%），疑似翻页变浅或接口截断，跳过下线判定")
+                continue
+            # 本轮仍出现 → 清零；未出现 → 累加
+            c.execute(f"UPDATE jobs SET miss_count=0 WHERE {scope} AND job_id IN ({ph})",
+                      sp + ids)
+            c.execute(
+                f"UPDATE jobs SET miss_count=COALESCE(miss_count,0)+1 "
+                f"WHERE {scope} AND status='active' AND job_id NOT IN ({ph})", sp + ids)
             cur = c.execute(
-                f"UPDATE jobs SET status='offline' "
-                f"WHERE keyword=? AND city_code=? AND source=? AND status='active' AND job_id NOT IN ({placeholders})",
-                [kw, cc, source] + ids)
+                f"UPDATE jobs SET status='offline', offline_at=? "
+                f"WHERE {scope} AND status='active' AND job_id NOT IN ({ph}) "
+                f"AND COALESCE(miss_count,0)>=?", [now] + sp + ids + [min_miss])
             offline += cur.rowcount
             c.execute(
                 f"UPDATE jobs SET is_new=0 "
-                f"WHERE keyword=? AND city_code=? AND source=? AND is_new=1 AND job_id NOT IN ({placeholders})",
-                [kw, cc, source] + ids)
+                f"WHERE {scope} AND is_new=1 AND job_id NOT IN ({ph})", sp + ids)
         c.commit()
         c.close()
+    _log(f"🔍 下线判定完成：标记 {offline} 条，耗时 {time.time() - _t0:.1f}s")
     return offline
+
+
+def recover_offline(hours=24, source=None):
+    """撤销下线判定（误杀回滚）：恢复为 active 并清零连续未出现计数。
+    hours<=0 → 不限时间，恢复全部「已下线」（用于旧数据整体重判）"""
+    with _lock:
+        c = conn()
+        where = "status='offline'"
+        p = []
+        if hours and hours > 0:
+            since = (datetime.now() - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
+            where += " AND COALESCE(offline_at,first_seen)>=?"
+            p.append(since)
+        if source:
+            where += " AND source=?"
+            p.append(source)
+        n = c.execute(f"UPDATE jobs SET status='active', miss_count=0, offline_at=NULL "
+                      f"WHERE {where}", p).rowcount
+        c.commit()
+        c.close()
+    return n
 
 
 # ---------- 筛选条件构建（query_jobs / all_job_rows 共用） ----------
@@ -576,6 +645,7 @@ def counts(source=""):
         "offline": one(f"SELECT COUNT(*) FROM jobs {base} AND status='offline'"),
         "new": one(f"SELECT COUNT(*) FROM jobs {base} AND is_new=1"),
         "applied": one(f"SELECT COUNT(*) FROM jobs {base} AND applied=1"),
+        "apply_failed": one(f"SELECT COUNT(*) FROM jobs {base} AND applied=2"),
         "salary_missing": one(f"SELECT COUNT(*) FROM jobs {base} "
                               "AND (salary_min IS NULL OR salary_min<=0)"),
         "desc_done": one(f"SELECT COUNT(*) FROM jobs {base} "
@@ -678,28 +748,37 @@ def get_staged(limit=500):
 
 
 def get_replied(limit=200, source=""):
-    """已回复岗位列表（按回复时间倒序，前端「HR 回复」页用）
+    """投递追踪列表（前端「HR 回复」页用）：**投递过就显示**，不等 HR 回复。
 
+    2026-10-23 用户要求：「投递完就在 HR 回复这里显示状态，不用已回复再显示」。
+    所以范围是 applied=1 OR replied=1，并用 replied 字段区分：
+      replied=1 → HR 已回复；replied=0 → 已投递等回复。
+    排序：未回复的排前面（需要跟进），同组内按投递/回复时间倒序。
     回复状态只有 BOSS 能自动同步；猎聘行只能靠手动标记，所以带上 source 让前端区分。
     """
     src = (source or "").strip()
     cond = " AND source=?" if src else ""
     params = ((src,) if src else ())
+    where = " WHERE (applied=1 OR replied=1)" + cond
     c = conn()
     rows = c.execute(
         "SELECT job_id, job_name, company, salary, salary_min, salary_max, city_name, area_district, "
         "COALESCE(source,'boss') source, "
         "job_url, status, applied, applied_at, replied, reply_note, reply_at, note, starred, "
-        "match_score, first_seen, stage, stage_at, stage_note FROM jobs WHERE replied=1" + cond +
-        " ORDER BY COALESCE(reply_at,'') DESC, COALESCE(match_score,0) DESC LIMIT ?",
+        "match_score, first_seen, stage, stage_at, stage_note FROM jobs" + where +
+        " ORDER BY COALESCE(replied,0) ASC, "
+        "COALESCE(NULLIF(applied_at,''), NULLIF(reply_at,''), first_seen) DESC LIMIT ?",
         params + (limit,)).fetchall()
     stats = c.execute(
         "SELECT COUNT(*) total, "
         "SUM(CASE WHEN applied=1 THEN 1 ELSE 0 END) applied, "
+        "SUM(CASE WHEN replied=1 THEN 1 ELSE 0 END) replied, "
+        "SUM(CASE WHEN applied=1 AND COALESCE(replied,0)=0 THEN 1 ELSE 0 END) waiting, "
         "SUM(CASE WHEN status='active' THEN 1 ELSE 0 END) active "
-        "FROM jobs WHERE replied=1" + cond, params).fetchone()
+        "FROM jobs" + where, params).fetchone()
     c.close()
     return {"total": stats["total"] or 0, "applied": stats["applied"] or 0,
+            "replied": stats["replied"] or 0, "waiting": stats["waiting"] or 0,
             "active": stats["active"] or 0, "rows": [dict(r) for r in rows]}
 
 
@@ -845,6 +924,17 @@ def set_applied(job_ids, applied, clear=False):
         c.commit()
         c.close()
         return cur.rowcount
+
+
+def failed_apply_ids(source="boss", limit=50):
+    """投递失败（applied=2）的岗位 ID，按最近投递时间倒序——供「一键重投」用"""
+    c = conn()
+    src = (source or "boss").strip()
+    rows = c.execute(
+        "SELECT job_id FROM jobs WHERE applied=2 AND source=? "
+        "ORDER BY COALESCE(applied_at,'') DESC LIMIT ?", (src, int(limit))).fetchall()
+    c.close()
+    return [r["job_id"] for r in rows]
 
 
 def set_detail(job_id, text, welfare=None, area=None):
@@ -1194,6 +1284,97 @@ def skill_gap(limit=18, source="", min_jobs=3):
     gap.sort(key=lambda x: -x["jobs"])
     covered = round(sum(1 for x in have) * 100.0 / max(1, len(have) + len(gap)), 1)
     return {"total": total, "have": have[:limit], "gap": gap[:limit], "coverage": covered}
+
+
+def _median(vals):
+    """中位数（偶数个取中间两个均值）；空列表返回 None"""
+    if not vals:
+        return None
+    s = sorted(vals)
+    n = len(s)
+    mid = n // 2
+    return s[mid] if n % 2 else round((s[mid - 1] + s[mid]) / 2.0, 1)
+
+
+def skill_salary(source="", min_jobs=5, limit=15):
+    """技能薪资分析：哪些技能在高薪岗位里更重要（市场需求侧，与 skill_gap 的个人视角互补）
+
+    每个技能给出：
+      jobs/pct       要求该技能的在招岗位数与占比（需求热度）
+      sal            要求该技能的岗位薪资中位数（K/月）
+      base           不要求该技能的岗位薪资中位数（对照基准）
+      premium        sal - base：这个技能「值多少 K」的组间差（相关性，非因果）
+      high_rate      该技能在「高薪岗」中的出现率（高薪岗 = 薪资≥全体 P75）
+      lift           high_rate / 整体出现率，>1 说明高薪岗明显更看重该技能
+    薪资代表值 = (salary_min+salary_max)/2；面议/缺失的岗位不计入薪资统计。
+    """
+    import resume as resume_mod
+    src = (source or "").strip()
+    cond = " AND source=?" if src else ""
+    c = conn()
+    rows = c.execute(
+        "SELECT job_name, skills, welfare, detail_text, salary_min, salary_max "
+        "FROM jobs WHERE status='active'" + cond,
+        ((src,) if src else ())).fetchall()
+    c.close()
+
+    # 每条岗位：薪资代表值 + 命中的技能集合
+    jobs, sals = [], []
+    for r in rows:
+        smin, smax = r["salary_min"], r["salary_max"]
+        if smin is not None and smax is not None:
+            sal = (smin + smax) / 2.0
+        elif smax is not None:
+            sal = float(smax)
+        elif smin is not None:
+            sal = float(smin)
+        else:
+            sal = None
+        hay = " ".join([str(r["job_name"] or ""), str(r["skills"] or ""),
+                        str(r["welfare"] or ""), str(r["detail_text"] or "")]).lower()
+        hit = {name for name, aliases, _w in resume_mod.SKILL_DICT
+               if any(resume_mod._has(a, hay) for a in aliases)}
+        jobs.append({"sal": sal, "hit": hit})
+        if sal is not None:
+            sals.append(sal)
+
+    total = len(jobs)
+    if not total or not sals:
+        return {"total": total, "known": len(sals), "high_threshold": None,
+                "median_salary": None, "skills": []}
+
+    sals_sorted = sorted(sals)
+    # 高薪线 = 薪资 P75
+    idx75 = int(round(0.75 * (len(sals_sorted) - 1)))
+    high_thr = sals_sorted[idx75]
+    high_sals = [s for s in sals if s >= high_thr]
+
+    out = []
+    for name, _al, _w in resume_mod.SKILL_DICT:
+        with_jobs = [j for j in jobs if name in j["hit"]]
+        n = len(with_jobs)
+        if n < min_jobs:
+            continue
+        without_jobs = [j for j in jobs if name not in j["hit"]]
+        sal_with = _median([j["sal"] for j in with_jobs if j["sal"] is not None])
+        sal_without = _median([j["sal"] for j in without_jobs if j["sal"] is not None])
+        high_n = sum(1 for j in with_jobs if j["sal"] is not None and j["sal"] >= high_thr)
+        known_with = sum(1 for j in with_jobs if j["sal"] is not None)
+        pct = round(n * 100.0 / total, 1)
+        high_rate = round(high_n * 100.0 / known_with, 1) if known_with else 0
+        out.append({
+            "skill": name, "jobs": n, "pct": pct,
+            "salary": sal_with, "base": sal_without,
+            "premium": round(sal_with - sal_without, 1) if (sal_with is not None and sal_without is not None) else None,
+            "high_rate": high_rate,
+            "lift": round(high_rate / pct, 2) if pct else None,
+        })
+    return {
+        "total": total, "known": len(sals),
+        "high_threshold": round(high_thr, 1),
+        "median_salary": _median(sals),
+        "skills": out[:limit * 4],   # 前端两种排序各取 limit，这里多给一些
+    }
 
 
 def conversion(by="source", source="", limit=12):

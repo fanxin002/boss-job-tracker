@@ -15,13 +15,24 @@ import db
 
 
 def _page_state(tab):
-    """返回 None=正常 / 'blocked:原因' / 'offline' 岗位已下架"""
+    """返回 None=正常 / 'blocked:原因' / 'offline' 岗位已下架
+
+    登录失效的识别（实测 2026-10-23）：wt2 在 BOSS 服务端过期后，cookie 文件里的
+    wt2 还在（文件不自己删），注入后打开详情页会跳转到
+    /web/passport/zp/error.html?code=7，正文「当前登录状态已失效」，
+    且页面没有「立即沟通」按钮——不识别就会误报成「岗位已下架」。
+    """
     try:
         url = (tab.url or "")
         if "login" in url or "verify" in url or "security-check" in url:
             return "blocked:登录失效或需要安全验证"
+        # 登录态过期：BOSS 跳 passport 错误页（code=7 就是登录失效）
+        if "passport/zp/error" in url or "error.html" in url:
+            return "blocked:BOSS 登录态已失效（页面跳转错误页 code=7，请重新登录）"
         body = tab.ele("tag:body", timeout=2)
         text = (body.text or "")[:1000] if body else ""
+        if "当前登录状态已失效" in text or "登录状态已失效" in text:
+            return "blocked:BOSS 登录态已失效（页面提示登录状态失效，请重新登录）"
         if any(k in text for k in ("安全验证", "滑块", "请完成验证", "访问异常")):
             return "blocked:触发安全验证"
         if "账户存在异常行为" in text or "环境存在异常" in text:
@@ -60,17 +71,32 @@ def _already_chatted(tab):
         return False
 
 
+# 「立即沟通」按钮选择器（2026-10-23 实测：BOSS 前端用 a.btn-startchat，
+# 旧的 .btn-start-talk 已不存在；父容器 div.btn-startchat-wrap 也含同样文字，
+# 用 text():立即沟通 会先命中不可点的 div → 所以必须优先用 a 标签的 class 选择器）
+_START_CHAT_SELECTORS = (
+    "x://a[contains(@class,'btn-startchat')]",
+    "x://a[contains(@class,'btn-start-talk')]",
+    "x://button[contains(@class,'btn-start-talk')]",
+    "x://button[contains(@class,'btn-startchat')]",
+    "text():立即沟通",
+)
+
+
 def _click_and_confirm(tab, greeting, logf):
     """点「立即沟通」→ 处理简历弹窗 → 轮询确认发起成功。返回 (ok, msg)"""
-    btn = _find_btn(tab, "x://a[contains(@class,'btn-start-talk')]",
-                    "x://button[contains(@class,'btn-start-talk')]",
-                    "text():立即沟通", "text():沟通")
+    btn = _find_btn(tab, *_START_CHAT_SELECTORS)
     if not btn:
         if _already_chatted(tab):
             return True, "已沟通过（跳过，不重复打招呼）"
         time.sleep(1.5)  # 慢加载重试一次
-        btn = _find_btn(tab, "x://a[contains(@class,'btn-start-talk')]", "text():立即沟通")
+        btn = _find_btn(tab, *_START_CHAT_SELECTORS)
         if not btn:
+            # 兜底二次确认：先分清是「未登录/风控」还是「真下架」，别把账号问题
+            # 误报成岗位问题（用户 2026-10-23 实际踩过：wt2 过期被报成岗位已下架）
+            st = _page_state(tab)
+            if st and str(st).startswith("blocked"):
+                return False, st
             return False, "未找到「立即沟通」按钮（岗位可能不可聊/已下架）"
     try:
         btn.click(by_js=True)
@@ -171,6 +197,18 @@ def run_apply(job_ids, greeting, logf, batch_id, max_batch=20, interval=(12, 30)
 
     page = crawler.ensure_browser(offscreen=True)  # 离屏有头：真实浏览器指纹，更不容易被判风控
     crawler.inject_cookies(page)
+    # 登录态活性前置探测（关键修复，2026-10-23）：
+    # 「cookie 文件里有 wt2」≠ BOSS 服务端认——会话过期时文件里的 wt2 还在，
+    # 注入后打开详情页会跳 error.html?code=7，曾被误报成「岗位已下架」。
+    # 这里用一次轻量接口探测真实登录态，失效/风控则整批不开始，不留脏失败记录。
+    code, pmsg = crawler.probe_api(page, "数据分析", "101230200")
+    if code in (401, 403, 36, 37, 38):
+        crawler._close_browser()
+        _why = {401: "登录态已失效", 403: "登录态已失效", 36: "触发风控",
+                37: "触发风控", 38: "触发风控"}.get(code, "异常")
+        logf(f"⛔ BOSS {_why}（接口 code={code} {pmsg or ''}），投递未开始。"
+             f"请点顶部「BOSS」胶囊重新扫码登录后再投递")
+        return 0, len(jobs)
     ok_cnt = fail_cnt = 0
     consecutive_fail = 0
     try:
@@ -189,10 +227,14 @@ def run_apply(job_ids, greeting, logf, batch_id, max_batch=20, interval=(12, 30)
                 logf(f"      ✅ {msg}")
             else:
                 fail_cnt += 1
-                if "已下架" not in msg:  # 下架属正常业务情况，不计入风控熔断
-                    consecutive_fail += 1
-                else:
+                # 只有「页面明确显示岗位已下架」（apply_one 的确切 offline 消息）才同步
+                # 下线状态。曾经的坑：只要失败消息里含「已下架」字样就 mark_job_offline，
+                # 而登录失效时的误报消息（"岗位可能不可聊/已下架"）也含这个词
+                # → 好岗位被冤成下线（用户 2026-10-23 实际踩过）。下架不计入熔断。
+                if msg.startswith("岗位已下架"):
                     db.mark_job_offline(j["job_id"])
+                else:
+                    consecutive_fail += 1
                 logf(f"      ❌ {msg}")
                 if consecutive_fail >= 3:
                     logf("⛔ 连续3条失败，停止本批（疑似风控/登录失效），未投递的岗位不受影响")

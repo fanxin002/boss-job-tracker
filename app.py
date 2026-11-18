@@ -3,14 +3,20 @@
 import csv
 import io
 import json
+import os
+import re
+import secrets
+import subprocess
+import sys
 import threading
 import time
 import uuid
 from datetime import datetime
+from urllib.parse import parse_qs, urlencode
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi import Body, FastAPI, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -31,7 +37,8 @@ except Exception:
 
 # 本地静态资源（Leaflet 地图库内置，不依赖外网 CDN 的 js/css）
 import os as _os
-_static_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "static")
+import runtime_paths as _rp
+_static_dir = _rp.collect_static()
 if _os.path.isdir(_static_dir):
     app.mount("/static", StaticFiles(directory=_static_dir), name="static")
 
@@ -43,6 +50,103 @@ _apply_cancel = {"flag": False}
 _detail_state = {"running": False, "log": [], "done": 0, "total": 0}
 _detail_cancel = {"flag": False}
 scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
+
+
+# ---------- 外网访问口令（内网穿透时启用；本机使用零影响） ----------
+# 规则：
+#   1) 没配 data/access_key.txt → 完全不启用，行为和以前一样
+#   2) 本机直连（127.0.0.1 且没有 Cloudflare 转发头）→ 免口令，自己电脑上不用输
+#   3) 其余（经隧道/局域网来的）→ 必须带 cookie 或 ?k=口令，否则只给登录页
+# 为什么不能用「来源是 127.0.0.1 就放行」：cloudflared 是在本机把请求转发进来的，
+# 隧道来的请求来源同样是 127.0.0.1，只能靠 CF-Connecting-IP / CF-Ray 区分。
+_ACCESS_FILE = _os.path.join(db.DATA_DIR, "access_key.txt")
+
+
+def _access_key():
+    try:
+        with open(_ACCESS_FILE, encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def _login_html(msg=""):
+    tip = f'<p class="err">{msg}</p>' if msg else ""
+    return f"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>访问口令 · 岗位追踪</title>
+<style>
+  *{{box-sizing:border-box}}
+  body{{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+    background:#f7f7f8;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;color:#262626}}
+  form{{background:#fff;border:1px solid #e6e6e6;border-radius:12px;padding:28px 26px;width:min(92vw,340px);
+    box-shadow:0 8px 30px rgba(0,0,0,.06)}}
+  h1{{margin:0 0 4px;font-size:18px}}
+  p{{margin:0 0 16px;font-size:13px;color:#6b6b6b}}
+  .err{{color:#c92a2a}}
+  input{{width:100%;height:42px;padding:0 12px;border:1px solid #ccc;border-radius:8px;font-size:16px;margin-bottom:12px}}
+  input:focus{{outline:none;border-color:#1c69d4;box-shadow:0 0 0 3px rgba(28,105,212,.15)}}
+  button{{width:100%;height:42px;border:0;border-radius:8px;background:#1c69d4;color:#fff;font-size:15px;font-weight:600}}
+  button:active{{background:#0653b6}}
+</style></head><body>
+<form method="post" action="/__login">
+  <h1>岗位追踪</h1>
+  <p>这是私人看板，请输入访问口令</p>
+  {tip}
+  <input name="k" type="password" inputmode="text" autocomplete="current-password" autofocus placeholder="访问口令">
+  <button type="submit">进入</button>
+</form></body></html>"""
+
+
+@app.middleware("http")
+async def _access_gate(request: Request, call_next):
+    key = _access_key()
+    if not key:
+        return await call_next(request)
+    host = (request.client.host if request.client else "") or ""
+    via_proxy = bool(request.headers.get("cf-connecting-ip") or request.headers.get("cf-ray")
+                     or request.headers.get("x-forwarded-for") or request.headers.get("ngrok-trace-id"))
+    # 判「本机直连」不能只看来源 IP：ngrok / cloudflared 都是在本机把请求转进来的，
+    # 来源同样是 127.0.0.1。**必须再看 Host 头**——
+    # 2026-10-26 实测：ngrok 转发不带 CF-Connecting-IP（也不带 X-Forwarded-For），
+    # 只靠来源 IP + 代理头判断，隧道流量会被当成「自己电脑」直接放行，口令闸形同虚设。
+    # 本机访问时 Host 一定是 127.0.0.1 / localhost；走隧道时 Host 是 xxx.ngrok-free.dev 等。
+    host_hdr = (request.headers.get("host") or "").split(":")[0].strip().lower().strip("[]")
+    loopback_host = host_hdr in ("127.0.0.1", "localhost", "::1")
+    if host == "testclient" and host_hdr in ("testserver", "") and not via_proxy:
+        # Starlette TestClient：虚拟来源，永远走不到网络上（Host 默认 testserver），
+        # 放行让 e2e 能测真实逻辑。但它一旦带了 CF/ngrok 转发头、或把 Host 改成隧道域名，
+        # 就必须按隧道处理 —— 否则门禁根本测不出来（2026-10-26 的 ngrok 放行漏洞就是这么漏的）
+        return await call_next(request)
+    if host in ("127.0.0.1", "::1", "localhost") and not via_proxy and loopback_host:
+        return await call_next(request)          # 本机直连：免口令
+    path = request.url.path
+    if path == "/__login":
+        if request.method == "POST":
+            # 手动解析 x-www-form-urlencoded：用 request.form() 会强依赖 python-multipart，
+            # 为了一个登录框多装一个包不值得
+            raw = (await request.body()).decode("utf-8", "ignore")
+            given = (parse_qs(raw).get("k") or [""])[0].strip()
+            if given and secrets.compare_digest(given, key):
+                resp = RedirectResponse("/", status_code=303)
+                resp.set_cookie("jbt", key, max_age=30 * 24 * 3600,
+                                httponly=True, samesite="lax")
+                return resp
+            return HTMLResponse(_login_html("口令不对，再试一次"), status_code=401)
+        return HTMLResponse(_login_html())
+    cookie_ok = secrets.compare_digest(str(request.cookies.get("jbt") or ""), key)
+    if cookie_ok:
+        return await call_next(request)
+    q = str(request.query_params.get("k") or "").strip()
+    if q and secrets.compare_digest(q, key):
+        # 用 ?k= 首次进来：种 cookie 后跳到去掉口令的干净地址（避免口令留在浏览器历史里）
+        rest = [(k2, v) for k2, v in request.query_params.multi_items() if k2 != "k"]
+        target = path + ("?" + urlencode(rest) if rest else "")
+        resp = RedirectResponse(target, status_code=303)
+        resp.set_cookie("jbt", key, max_age=30 * 24 * 3600, httponly=True, samesite="lax")
+        return resp
+    return HTMLResponse(_login_html(), status_code=401)
+
 
 
 # ---------- 获取执行 ----------
@@ -337,6 +441,300 @@ def api_get_config():
         cfg["cities"] = []
     cfg["pages"] = int(cfg.get("pages") or 10)
     return cfg
+
+
+class BrowserIn(BaseModel):
+    name: str = "auto"
+
+
+def _browser_busy():
+    return any(s.get("running") for s in
+               (_state, _liepin_state, _unified_state, _detail_state, _apply_state))
+
+
+@app.get("/api/browser")
+def api_browser_get():
+    """抓取用的浏览器：本机装了哪些、当前用哪个、偏好是什么"""
+    avail = crawler.available_browsers()
+    pref = crawler.get_browser_pref()
+    name, exe = crawler.pick_browser()
+    env = (os.environ.get(crawler.PREF_ENV) or "").strip().lower()
+    return {
+        "pref": pref,
+        "env_locked": env if env in ("chrome", "edge") else "",
+        "current": {
+            "name": name or "",
+            "label": crawler.BROWSER_LABELS.get(name, ""),
+            "exe": exe or "",
+            "version": next((b["version"] for b in avail if b["name"] == name), ""),
+        },
+        "available": avail,
+    }
+
+
+@app.post("/api/browser")
+def api_browser_set(body: BrowserIn):
+    """切换抓取用浏览器（auto 时 Chrome 优先、没装才用 Edge）。
+    切换会关掉现有实例，下次获取即用新浏览器；profile 按浏览器分家，
+    新浏览器里要重新扫一次码，Cookie 文件会自动注入能救回一部分登录态。"""
+    try:
+        pref = crawler.set_browser_pref(body.name)
+    except ValueError as e:
+        return {"ok": False, "msg": str(e)}
+    avail = {b["name"] for b in crawler.available_browsers()}
+    if pref != "auto" and pref not in avail:
+        return {"ok": False, "msg": f"本机没装 {crawler.BROWSER_LABELS.get(pref, pref)}，无法切换"}
+    name, _ = crawler.pick_browser()
+    label = crawler.BROWSER_LABELS.get(name, name or "无")
+    if _browser_busy():
+        return {"ok": True, "msg": f"已保存为 {label}；当前有任务在跑，本轮结束后生效"}
+    try:
+        crawler.close_all()
+    except Exception:
+        pass
+    return {"ok": True, "msg": f"已切到 {label}" + ("（自动选择 Chrome 优先）" if pref == "auto" else "")}
+
+
+# ---------- 远程访问（内网穿透）状态 ----------
+# 页面里要能看到「隧道开没开、公网地址是多少、口令是什么」，
+# 不用再去翻 tunnel.py 的窗口输出。
+def _read_text(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def _pid_running(pid):
+    if not pid or not str(pid).isdigit():
+        return False
+    try:
+        out = subprocess.run(["tasklist", "/FI", "PID eq %s" % pid],
+                             capture_output=True, text=True, errors="ignore",
+                             timeout=8).stdout
+        return str(pid) in out
+    except Exception:
+        return False
+
+
+def _req_is_local(request):
+    """本机直连判据，与 _access_gate 保持同一口径：
+    只看来源 IP 会被隧道流量骗过去（ngrok/cloudflared 都从本机转发），必须同时看 Host 头。"""
+    host = (request.client.host if request.client else "") or ""
+    if host == "testclient":     # e2e 的虚拟来源
+        return True
+    host_hdr = (request.headers.get("host") or "").split(":")[0].strip().lower().strip("[]")
+    via_proxy = bool(request.headers.get("cf-connecting-ip") or request.headers.get("cf-ray")
+                     or request.headers.get("x-forwarded-for") or request.headers.get("ngrok-trace-id"))
+    return (host in ("127.0.0.1", "::1", "localhost") and not via_proxy
+            and host_hdr in ("127.0.0.1", "localhost", "::1"))
+
+
+@app.get("/api/tunnel")
+def api_tunnel(request: Request):
+    """远程访问状态：隧道在不在跑、公网地址、口令、是否固定域名。
+    只读现有线索，不启动/停止任何进程。"""
+    import tunnel as tun
+
+    url = _read_text(tun.URL_FILE)
+    try:
+        live = tun._ngrok_public_url(wait=0)   # ngrok 在跑时 4040 API 是最新最准的信号
+    except Exception:
+        live = ""
+    if live:
+        url = live
+
+    pid = _read_text(tun.PID_FILE)
+    pid_alive = _pid_running(pid)
+
+    if live or "ngrok" in url:
+        provider = "ngrok"
+    elif "cloudflare" in url or "trycloudflare" in url:
+        provider = "cloudflare"
+    else:
+        provider = _read_text(tun.PROVIDER_FILE).lower()
+    # 「地址是否固定」：ngrok 只要配了 authtoken，给的域名就是账号专属的，重开隧道不变；
+    # cloudflared 只有具名隧道才固定，快速隧道每次随机。
+    # （以前只看 ngrok_domain.txt，但那个文件从没被写过，导致固定域名被误标成"会变"）
+    fixed = bool((provider == "ngrok" and _read_text(tun.NG_TOKEN_FILE))
+                 or (provider == "cloudflare" and _read_text(tun.CF_HOST_FILE)))
+
+    # 「在线」要同时满足：有地址 + 进程还在。
+    # 只看到地址文件是不够的：用户关掉隧道窗口后文件还在，地址已经失效了。
+    online = bool(live) or bool(url and pid_alive)
+
+    key = _access_key()
+    local = _req_is_local(request)
+    return {
+        "local_url": "http://127.0.0.1:8765",
+        "online": online,
+        "provider": provider,
+        "provider_label": {"ngrok": "ngrok", "cloudflare": "Cloudflare"}.get(provider, "隧道"),
+        "url": url,
+        "stale": bool(url and not online),   # 地址是上次的，隧道已断
+        "fixed": fixed,
+        "has_ng_token": bool(_read_text(tun.NG_TOKEN_FILE)),
+        "pid": int(pid) if pid.isdigit() else None,
+        "key_set": bool(key),
+        # 口令只在本机直连时明文返回；走隧道访问的人已经在门禁内，没必要再暴露一次
+        "key": key if local else ("已设置" if key else ""),
+        "is_local_request": local,
+        "checked_at": datetime.now().strftime("%H:%M:%S"),
+    }
+
+
+# ---------- 远程访问配置引导所需的两个写入口 ----------
+# 以前口令只能靠 tunnel.py 启动时自动生成、ngrok token 只能命令行写，
+# 页面里没有任何配置入口，用户点「启动隧道」前根本不知道该做什么。
+_KEY_RE = re.compile(r"^[A-Za-z0-9_-]{4,32}$")
+
+
+@app.get("/api/access-key")
+def api_access_key(request: Request):
+    """口令状态。明文只在电脑上（本机直连）返回，手机端一律不给。"""
+    key = _access_key()
+    local = _req_is_local(request)
+    return {"set": bool(key),
+            "key": key if local else ("已设置" if key else ""),
+            "is_local_request": local}
+
+
+@app.post("/api/access-key")
+def api_access_key_set(request: Request, payload: dict = Body(default={})):
+    """设置访问口令：key 留空自动生成 10 位，也可自定义 4–32 位。"""
+    if not _req_is_local(request):
+        return JSONResponse({"ok": False, "msg": "只能在电脑上设置口令"}, status_code=403)
+    import tunnel as tun
+    raw = str((payload or {}).get("key") or "").strip()
+    if not raw:
+        key = tun.ensure_key()
+        msg = "已生成访问口令，请复制保存"
+    else:
+        if not _KEY_RE.fullmatch(raw):
+            return {"ok": False, "msg": "口令只能是 4–32 位字母、数字、下划线或短横线"}
+        key = raw
+        _os.makedirs(_os.path.dirname(_ACCESS_FILE), exist_ok=True)
+        with open(_ACCESS_FILE, "w", encoding="utf-8") as f:
+            f.write(key)
+        msg = "访问口令已保存"
+    return {"ok": True, "msg": msg, "key": key}
+
+
+@app.post("/api/tunnel/token")
+def api_tunnel_token(request: Request, payload: dict = Body(default={})):
+    """保存 ngrok authtoken，让公网地址固定下来（免费，重启隧道也不变）。"""
+    if not _req_is_local(request):
+        return JSONResponse({"ok": False, "msg": "只能在电脑上配置"}, status_code=403)
+    import tunnel as tun
+    token = str((payload or {}).get("token") or "").strip()
+    if not token:
+        return {"ok": False, "msg": "token 不能为空"}
+    if len(token) > 512 or "\n" in token or "\r" in token:
+        return {"ok": False, "msg": "token 格式不对，请重新复制"}
+    _os.makedirs(_os.path.dirname(tun.NG_TOKEN_FILE), exist_ok=True)
+    with open(tun.NG_TOKEN_FILE, "w", encoding="utf-8") as f:
+        f.write(token)
+    return {"ok": True, "msg": "已保存，下次启动隧道就是固定地址"}
+
+
+_TUNNEL_DIR = _rp.RESOURCE_DIR
+_TUNNEL_LOG = _os.path.join(_rp.LOG_DIR, "tunnel.log")
+_tunnel_starting = {"flag": False}
+
+
+@app.post("/api/tunnel/start")
+def api_tunnel_start():
+    """页面上一键起隧道（后台常驻，不占窗口，关窗口也不断）。
+
+    以前只能双击 tunnel.bat：那个窗口一关隧道就断，公网地址立刻变 3200 离线。
+    这里用 DETACHED_PROCESS 拉起，和 serve.py 起服务一个路子。
+    """
+    import tunnel as tun
+    # 开公网前必须有口令：地址谁拿到谁能开，没口令等于看板裸奔
+    try:
+        tun.ensure_key()
+    except OSError:
+        return {"ok": False, "msg": "访问口令写入失败，检查数据目录是否可写"}
+    try:
+        live = tun._ngrok_public_url(wait=0)
+    except Exception:
+        live = ""
+    if live:
+        return {"ok": True, "msg": "隧道已经在运行", "url": live}
+    if _tunnel_starting["flag"]:
+        return {"ok": False, "msg": "正在启动中，请等几秒再看"}
+
+    _tunnel_starting["flag"] = True
+    try:
+        _os.makedirs(_os.path.dirname(_TUNNEL_LOG), exist_ok=True)
+        env = tun.clean_env()      # 关键：剥掉 HTTP(S)_PROXY，否则 ngrok 直接报 ERR_NGROK_9009
+        env["PYTHONUNBUFFERED"] = "1"
+        env["PYTHONIOENCODING"] = "utf-8"
+        flags = 0x00000008 | 0x08000000          # DETACHED_PROCESS | CREATE_NO_WINDOW
+        # 用 pythonw.exe（无控制台版）跑：只靠 DETACHED_PROCESS 在某些环境下
+        # 仍会闪一个 python 黑窗口并一直挂在前台，pythonw 从根上没有控制台。
+        # 打包成 exe 后 sys.executable 是程序自身，不能再当解释器用，
+        # 改走自己的 --tunnel-worker 分支（见 desktop.py）。
+        if getattr(sys, "frozen", False):
+            cmd = [sys.executable, "--tunnel-worker"]
+        else:
+            pyexe = sys.executable
+            _pyw = _os.path.join(_os.path.dirname(pyexe), "pythonw.exe")
+            if _os.path.exists(_pyw):
+                pyexe = _pyw
+            cmd = [pyexe, _os.path.join(_TUNNEL_DIR, "tunnel.py")]
+        with open(_TUNNEL_LOG, "a", encoding="utf-8", errors="replace") as lf:
+            lf.write("\n===== 启动隧道 %s =====\n" % datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            lf.flush()
+            subprocess.Popen(cmd, cwd=_rp.STATE_DIR, stdin=subprocess.DEVNULL, stdout=lf,
+                             stderr=subprocess.STDOUT, close_fds=True,
+                             creationflags=flags, env=env)
+        deadline = time.time() + 40
+        url = ""
+        while time.time() < deadline:
+            try:
+                url = tun._ngrok_public_url(wait=1)
+            except Exception:
+                url = ""
+            if url:
+                break
+        if url:
+            return {"ok": True, "msg": "隧道已启动", "url": url}
+
+        tail = ""
+        try:
+            with open(_TUNNEL_LOG, encoding="utf-8", errors="ignore") as f:
+                tail = f.read()[-500:]
+        except OSError:
+            pass
+        low = tail.lower()
+        if "9009" in tail or "proxy_url" in low or "http/s proxy" in low:
+            return {"ok": False, "msg": "ngrok 免费版不能走 HTTP 代理（ERR_NGROK_9009）："
+                                        "检查 %LOCALAPPDATA%\\ngrok\\ngrok.yml 里有没有 proxy_url，"
+                                        "或换 Cloudflare 隧道"}
+        return {"ok": False, "msg": "启动超时（40 秒没拿到地址），详见 logs/tunnel.log"}
+    finally:
+        _tunnel_starting["flag"] = False
+
+
+@app.post("/api/tunnel/stop")
+def api_tunnel_stop():
+    import tunnel as tun
+    pid = _read_text(tun.PID_FILE)
+    if not pid.isdigit():
+        return {"ok": False, "msg": "没记录到隧道进程；如果它还开着，去那个窗口按 Ctrl+C"}
+    ok = False
+    try:
+        r = subprocess.run(["taskkill", "/F", "/PID", pid], capture_output=True, timeout=15)
+        ok = r.returncode == 0
+    except Exception:
+        ok = False
+    try:
+        _os.remove(tun.PID_FILE)
+    except OSError:
+        pass
+    return {"ok": ok, "msg": "隧道已停止" if ok else "停止失败，进程可能已经退出了"}
 
 
 def _next_run_str():
@@ -718,6 +1116,42 @@ def _pending_has_boss(job_ids, filters):
 
 # ---------- 城市库 ----------
 _city_state = {"running": False, "last": ""}
+_lp_city_state = {"running": False, "last": ""}
+
+
+@app.get("/api/liepin_cities")
+def api_liepin_cities():
+    """猎聘支持的城市（配置页用来标注哪些城市能抓猎聘）"""
+    m, at = liepin.load_cities()
+    return {"cities": sorted(m.keys()), "count": len(m), "synced_at": at,
+            "syncing": _lp_city_state["running"]}
+
+
+@app.post("/api/liepin_cities/sync")
+def api_liepin_cities_sync():
+    """从猎聘接口拉全量城市码（与 BOSS 城市库同步对等）"""
+    if _lp_city_state["running"]:
+        return {"ok": True, "msg": "正在同步中，请稍候…"}
+    if _state["running"] or _detail_state["running"] or _apply_state["running"]:
+        return {"ok": False, "msg": "有任务在跑（获取/补抓/投递），请等它结束再同步城市"}
+
+    def _run():
+        _lp_city_state["running"] = True
+        try:
+            ok, info = liepin.sync_cities()
+            _lp_city_state["last"] = f"成功同步 {info} 个城市" if ok else f"同步失败：{info}"
+        finally:
+            _lp_city_state["running"] = False
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"ok": True, "msg": "已开始同步猎聘城市库（几秒钟）"}
+
+
+@app.get("/api/liepin_cities/sync_state")
+def api_liepin_cities_sync_state():
+    m, at = liepin.load_cities()
+    return {"running": _lp_city_state["running"], "last": _lp_city_state["last"],
+            "count": len(m), "synced_at": at}
 
 
 @app.get("/api/cities")
@@ -767,6 +1201,13 @@ def api_skills_gap(source: str = "", min_jobs: int = 3):
     return db.skill_gap(source=(source or "").strip(), min_jobs=max(1, min(int(min_jobs), 20)))
 
 
+@app.get("/api/skills/salary")
+def api_skills_salary(source: str = "", min_jobs: int = 5):
+    """技能薪资分析：哪些技能在高薪岗位中更常见、薪资溢价多少（市场需求侧）"""
+    return db.skill_salary(source=(source or "").strip(),
+                           min_jobs=max(2, min(int(min_jobs), 30)))
+
+
 @app.get("/api/conversion")
 def api_conversion(by: str = "source", source: str = ""):
     """投递转化分析：by=source/scale/keyword/city/degree"""
@@ -814,10 +1255,15 @@ def api_backup():
     return {"ok": bool(p), "msg": f"已备份到 {p}" if p else "备份失败", "path": p}
 
 
-@app.get("/api/liepin_cities")
-def api_liepin_cities():
-    """猎聘支持的城市（配置页用来标注哪些城市能抓猎聘）"""
-    return {"cities": sorted(liepin.CITY_CODE.keys())}
+@app.post("/api/offline/recover")
+def api_offline_recover(hours: int = 24, source: str = None):
+    """撤销「已下线」判定（抓取不完整导致误杀时回滚）。hours<=0 表示不限时间、全部恢复"""
+    hours = int(hours or 24)
+    hours = 0 if hours <= 0 else min(hours, 24 * 30)
+    n = db.recover_offline(hours=hours, source=source or None)
+    scope = "全部" if hours <= 0 else f"最近 {hours} 小时内"
+    return {"ok": n > 0, "count": n,
+            "msg": f"已恢复 {n} 条为在招" if n else f"{scope}没有被判下线的岗位"}
 
 
 @app.get("/api/details_status")
@@ -1065,7 +1511,7 @@ def api_reply_state():
 
 @app.get("/api/replies")
 def api_replies(limit: int = 200, source: str = ""):
-    """已回复岗位列表（前端「HR 回复」页）。
+    """投递追踪列表（前端「HR 回复」页）：**投递过就显示**，分「等待回复 / 已回复」两态。
 
     自动同步只支持 BOSS（读 BOSS 会话列表里的公司名）；猎聘的回复在猎聘站内 IM，
     需要登录态调私有接口，本工具不接入 —— 猎聘岗位只能用「手动标记 HR 已回复」。
@@ -1165,6 +1611,29 @@ def api_apply(body: ApplyIn):
     return {"ok": True, "msg": f"已启动投递 {len(valid)} 条{extra}（后台静默，日志实时可见）"}
 
 
+@app.post("/api/apply_retry")
+def api_apply_retry():
+    """一键重投：把投递失败（applied=2）的岗位重新排队（登录失效/风控失败的都能重投）"""
+    st = crawler.get_login_state()
+    if not st.get("logged"):
+        return {"ok": False, "msg": "未登录 BOSS：请先点顶部「BOSS」胶囊修复登录态，再重投（否则起了批也会秒退）"}
+    ids = db.failed_apply_ids(source="boss", limit=int(db.get_config().get("apply_max_batch") or 20))
+    if not ids:
+        return {"ok": False, "msg": "当前没有投递失败的岗位"}
+    if _state["running"]:
+        return {"ok": False, "msg": "获取进行中，请等本轮结束再投递"}
+    risk = db.get_risk()
+    if risk["active"]:
+        return {"ok": False, "msg": _risk_block_msg(risk)}
+    with _apply_lock:
+        if _apply_state["running"]:
+            return {"ok": False, "msg": "已有投递在运行"}
+    cfg = db.get_config()
+    t = threading.Thread(target=_do_apply, args=[ids, (cfg.get("greeting") or "").strip()], daemon=True)
+    t.start()
+    return {"ok": True, "msg": f"已重新投递 {len(ids)} 条失败岗位（后台静默）"}
+
+
 @app.get("/api/apply_status")
 def api_apply_status():
     with _apply_lock:
@@ -1228,12 +1697,53 @@ def api_export(keyword: str = "", city_code: str = "", is_new: int = 0, status: 
 
 
 # ---------- 前端 ----------
+# ---------- 前端（两份：电脑版 index.html / 手机版 m.html） ----------
+_STATIC = _rp.collect_static()
+_MOBILE_UA = re.compile(r"Mobile|Android|iPhone|iPod|Windows Phone|HarmonyOS|MiuiBrowser|MicroMessenger", re.I)
+
+
+def _serve_html(name):
+    """读静态页 + 注入版本戳，并禁止缓存（口令过期后拿到缓存壳会显示「0 条/未登录」的假象）"""
+    from datetime import datetime as _dt
+    path = os.path.join(_STATIC, name)
+    try:
+        with open(path, encoding="utf-8") as f:
+            html = f.read()
+    except OSError as e:
+        # 页面文件缺失时给可读的诊断页，不要甩一个 Internal Server Error
+        return HTMLResponse(
+            "<!doctype html><meta charset=utf-8><title>页面文件缺失</title>"
+            "<div style='font:15px/1.8 system-ui;padding:40px;max-width:640px;margin:0 auto'>"
+            "<h2 style='color:#c0392b'>页面文件缺失（服务本身是活的）</h2>"
+            "<p>前端文件没找到：<code>%s</code></p>"
+            "<p style='color:#666'>%s</p>"
+            "<p>处理办法：关掉程序再重新打开一次（会自动把页面补回去）。"
+            "若反复出现，重新下载一份 exe。</p>"
+            "<p><a href='/api/status'>查看服务状态</a></p></div>"
+            % (path, e),
+            status_code=503)
+    # 版本戳：前端角落显示，用来一眼判断「浏览器是不是还在用旧页面」
+    try:
+        stamp = _dt.fromtimestamp(os.path.getmtime(path)).strftime("%m-%d %H:%M")
+    except OSError:
+        stamp = "-"
+    html = html.replace("__BUILD__", stamp)
+    return HTMLResponse(html, headers={"Cache-Control": "no-store, must-revalidate"})
+
+
 @app.get("/", response_class=HTMLResponse)
-def index():
-    import os
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "index.html")
-    with open(path, encoding="utf-8") as f:
-        return f.read()
+def index(request: Request, desktop: int = 0):
+    """手机 UA 自动进手机版；`/?desktop=1` 可强制电脑版（手机版页脚也有「切到电脑版」）"""
+    ua = request.headers.get("user-agent", "") or ""
+    if not desktop and _MOBILE_UA.search(ua):
+        return RedirectResponse("/m", status_code=302)
+    return _serve_html("index.html")
+
+
+@app.get("/m", response_class=HTMLResponse)
+def mobile_page():
+    """手机版：卡片列表 + 底部导航 + 下拉刷新，专为小屏写的独立页面（不是桌面版缩窄）"""
+    return _serve_html("m.html")
 
 
 @app.get("/api/map")

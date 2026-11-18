@@ -14,10 +14,168 @@ import db
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROFILE_DIR = os.path.join(db.DATA_DIR, "chrome_profile")
 
-CHROME_CANDIDATES = [
-    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-]
+# ---------- 浏览器选择：Chrome 优先，装不上就自动退到 Edge ----------
+# 两个都是 Chromium 内核，DrissionPage 同一套 CDP 接口，代码完全通用。
+# 差异只在三处：exe 路径、User-Agent 里的品牌段、user-data-dir 必须分家
+# （不同浏览器写同一个 profile 目录会互相污染登录态）。
+_LOCAL = os.environ.get("LOCALAPPDATA", r"C:\Users\Default\AppData\Local")
+BROWSER_PATHS = {
+    "chrome": [
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        os.path.join(_LOCAL, r"Google\Chrome\Application\chrome.exe"),
+    ],
+    "edge": [
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+        os.path.join(_LOCAL, r"Microsoft\Edge\Application\msedge.exe"),
+    ],
+}
+BROWSER_LABELS = {"chrome": "Chrome", "edge": "Edge"}
+BROWSER_PROC = {"chrome": "chrome.exe", "edge": "msedge.exe"}
+PREF_FILE = os.path.join(db.DATA_DIR, "browser_pref.json")
+UA_FILE = os.path.join(db.DATA_DIR, "browser_ua.json")   # 真机 UA 缓存（见 remember_ua）
+PREF_ENV = "JOB_BROWSER"          # 环境变量可强制：chrome / edge
+_ver_cache = {}
+
+# 兼容旧名（外部脚本/文档里引用过）
+CHROME_CANDIDATES = BROWSER_PATHS["chrome"]
+
+
+def _exe_version(exe):
+    """从 exe 同级的版本目录名（如 130.0.6723.92）取版本号，纯文件系统操作。
+    Application 目录下就躺着这个版本目录，比调 PowerShell 读 VersionInfo 快得多。"""
+    if exe in _ver_cache:
+        return _ver_cache[exe]
+    ver = ""
+    try:
+        for d in os.listdir(os.path.dirname(exe)):
+            parts = d.split(".")
+            if len(parts) == 4 and all(x.isdigit() for x in parts):
+                if not ver or tuple(map(int, d.split("."))) > tuple(map(int, ver.split("."))):
+                    ver = d
+    except Exception:
+        pass
+    ver = ver or "130.0.0.0"
+    _ver_cache[exe] = ver
+    return ver
+
+
+def available_browsers():
+    """探测本机装了哪些浏览器：[{name,label,exe,version}]，按 chrome→edge 排序"""
+    out = []
+    for name in ("chrome", "edge"):
+        exe = next((p for p in BROWSER_PATHS[name] if os.path.exists(p)), None)
+        if exe:
+            out.append({"name": name, "label": BROWSER_LABELS[name],
+                        "exe": exe, "version": _exe_version(exe)})
+    return out
+
+
+def get_browser_pref():
+    """读偏好：环境变量 > data/browser_pref.json > auto"""
+    env = (os.environ.get(PREF_ENV) or "").strip().lower()
+    if env in ("chrome", "edge"):
+        return env
+    try:
+        import json as _json
+        with open(PREF_FILE, encoding="utf-8") as f:
+            v = str((_json.load(f) or {}).get("browser") or "").strip().lower()
+        if v in ("chrome", "edge", "auto"):
+            return v
+    except Exception:
+        pass
+    return "auto"
+
+
+def set_browser_pref(name):
+    """设置偏好（auto/chrome/edge）。改成 auto 时删除文件即可。"""
+    import json as _json
+    name = (name or "").strip().lower()
+    if name not in ("auto", "chrome", "edge"):
+        raise ValueError("浏览器只能是 auto / chrome / edge")
+    try:
+        if name == "auto":
+            os.remove(PREF_FILE)
+        else:
+            with open(PREF_FILE, "w", encoding="utf-8") as f:
+                _json.dump({"browser": name}, f, ensure_ascii=False)
+    except FileNotFoundError:
+        pass
+    return name
+
+
+def pick_browser(prefer=None):
+    """返回 (name, exe)。指定了 prefer 就只用它；否则 auto = Chrome 优先、退 Edge。
+    两个都没有 → 返回 (None, None)，由调用方给出明确报错（不再静默启动失败）。"""
+    avail = {b["name"]: b["exe"] for b in available_browsers()}
+    want = (prefer or get_browser_pref()).strip().lower()
+    if want in ("chrome", "edge"):
+        if want in avail:
+            return want, avail[want]
+        # 指定了但没装 → 仍按 auto 兜底，不让任务直接卡死
+    for n in ("chrome", "edge"):
+        if n in avail:
+            return n, avail[n]
+    return None, None
+
+
+def browser_ua(name, exe):
+    """headless 模式必须覆盖默认 UA（带 HeadlessChrome 特征会被 BOSS 风控直接判
+    code=37），覆盖的这份要和实际浏览器品牌一致 —— Chrome 的 UA 里说 Edge、
+    或 Edge 里说 Chrome，反而更像伪造。
+
+    版本号格式有个坑：Chrome/Edge 都启用了 UA Reduction，真机上报的是
+    `Chrome/155.0.0.0`（次版本冻结成 0），不是 `155.0.4314.42`。
+    实测 Edge 156 离屏模式 navigator.userAgent 就是 155.0.0.0，
+    所以这里也按 major.0.0.0 生成；拿到过真机 UA 就直接用真机那份。"""
+    ver = _exe_version(exe) if exe else "130.0.0.0"
+    major = ver.split(".")[0]
+    try:
+        import json as _json
+        with open(UA_FILE, encoding="utf-8") as f:
+            c = (_json.load(f) or {}).get(name) or {}
+        # 用 exe 版本比对，不要用 UA 里的 Chrome major：Edge 156 的 UA 报的是 Chrome 155，
+        # 拿 UA 的 major 去比永远对不上，缓存形同失效
+        if c.get("ver") == ver and c.get("ua"):
+            return c["ua"]
+    except Exception:
+        pass
+    base = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/%s.0.0.0 Safari/537.36" % major)
+    if name == "edge":
+        base += " Edg/%s.0.0.0" % major
+    return base
+
+
+def remember_ua(name, ua, exe=None):
+    """有头/离屏模式读到真机 UA 就缓存下来，之后无头模式直接用这份，
+    连 major 版本差一档的风险都没有（Edge 156 的 UA 里报的是 Chrome 155）。"""
+    import json as _json
+    ua = (ua or "").strip()
+    if not ua or "Headless" in ua:
+        return
+    data = {}
+    try:
+        with open(UA_FILE, encoding="utf-8") as f:
+            data = _json.load(f) or {}
+    except Exception:
+        data = {}
+    data[name] = {"ua": ua, "ver": _exe_version(exe) if exe else "",
+                  "at": time.strftime("%Y-%m-%d %H:%M:%S")}
+    try:
+        with open(UA_FILE, "w", encoding="utf-8") as f:
+            _json.dump(data, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def profile_for_browser(profile, name):
+    """profile 目录按浏览器分家：Edge 走 `<原名>_edge`。
+    Chrome 和 Edge 不能共用一个 user-data-dir，否则后启动的会认为 profile 被占用/损坏。
+    Chrome 保持原路径不变，已有登录态零迁移。"""
+    profile = profile.rstrip("\\/")
+    return profile + "_edge" if name == "edge" else profile
 
 # 在列表页上下文内调接口：携带完整 cookie/wt2 会话，绕开 DOM 字体加密薪资
 # 注意：DrissionPage run_js 不支持顶层 await，必须返回 Promise（awaitPromise 自动等待）
@@ -48,15 +206,22 @@ def _get_free_port():
     return port
 
 
-def cleanup_stale_browsers(match=None):
-    """杀掉使用本项目 profile 的残留 Chrome 进程（精确匹配命令行，不碰日常浏览器）。
-    match 给定时只杀命令行含该串的进程（平台隔离：清 boss 不误杀猎聘，反之亦然）"""
+def cleanup_stale_browsers(match=None, exe=None):
+    """杀掉使用本项目 profile 的残留浏览器进程（精确匹配命令行，不碰日常浏览器）。
+    match 给定时只杀命令行含该串的进程（平台隔离：清 boss 不误杀猎聘，反之亦然）。
+    exe 给定时只扫对应进程名（chrome.exe / msedge.exe），避免多扫一遍。"""
     try:
         import subprocess
-        frag = match or "boss-job-tracker"
-        q = ("Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
+        frag = (match or "boss-job-tracker").replace("'", "")
+        if exe:
+            base = os.path.basename(exe).lower()
+            names = [base] if base in BROWSER_PROC.values() else list(BROWSER_PROC.values())
+        else:
+            names = list(BROWSER_PROC.values())
+        nf = " or ".join("Name='%s'" % n for n in names)
+        q = ("Get-CimInstance Win32_Process -Filter \"%s\" | "
              "Where-Object { $_.CommandLine -like '*%s*' } | "
-             "ForEach-Object { $_.ProcessId }") % frag
+             "ForEach-Object { $_.ProcessId }") % (nf, frag)
         out = subprocess.run(["powershell", "-NoProfile", "-Command", q],
                              capture_output=True, text=True, timeout=30).stdout
         for pid in out.split():
@@ -74,18 +239,15 @@ _browsers = {"boss": _browser}                  # 按 slot 隔离：liepin 等�
 
 # 指纹加固：抹掉自动化痕迹，补齐真人浏览器该有的属性
 # 只做「还原成普通浏览器」的伪装，不伪造敏感字段；每个新 document 生效
+# 2026-10-26 实测（Chrome 155 / Edge 156 四组对比）：navigator.plugins（5 个）、
+# mimeTypes（2 个）、hardwareConcurrency（12）在真机无头/离屏下本来就是正常的，
+# 原先硬编码成 3 个假插件、8 核反而与真机不符 —— 这些项一旦哪天真的生效就是破绽，
+# 因此全部删除，只保留真正需要抹掉的 webdriver / chrome 对象 / permissions。
 _STEALTH_JS = """
 Object.defineProperty(navigator,'webdriver',{get:()=>undefined});
 if(!window.chrome) window.chrome={};
 if(!window.chrome.runtime) window.chrome.runtime={};
 Object.defineProperty(navigator,'languages',{get:()=>['zh-CN','zh','en']});
-Object.defineProperty(navigator,'plugins',{get:()=>[
-  {name:'Chrome PDF Plugin',filename:'internal-pdf-viewer',description:'Portable Document Format'},
-  {name:'Chrome PDF Viewer',filename:'mhjfbmdgcfjbbpaeojofohoefgiehjai',description:''},
-  {name:'Native Client',filename:'internal-nacl-plugin',description:''}]});
-Object.defineProperty(navigator,'mimeTypes',{get:()=>[{type:'application/pdf'},{type:'application/x-google-chrome-pdf'}]});
-Object.defineProperty(navigator,'hardwareConcurrency',{get:()=>8});
-Object.defineProperty(navigator,'deviceMemory',{get:()=>8});
 if(navigator.permissions&&navigator.permissions.query){
   var _q=navigator.permissions.query.bind(navigator.permissions);
   navigator.permissions.query=function(p){
@@ -115,35 +277,38 @@ def _page_alive(page):
 
 
 def ensure_browser(headless=False, offscreen=False, profile=None, slot="boss"):
-    """进程内按 slot 单例：复用同一浏览器；模式变化则重建。
+    """进程内按 slot 单例：复用同一浏览器；模式/浏览器变化则重建。
     slot 隔离：boss 与猎聘各自独立 profile / 独立浏览器实例，互不抢占。
     三种模式：
       headless=True          真无头（最快，但 HeadlessChrome 指纹易被识别 → code=37）
-      offscreen=True         离屏有头：真实浏览器窗口挪到屏幕外，用户看不见，指纹是真 Chrome（推荐）
+      offscreen=True         离屏有头：真实浏览器窗口挪到屏幕外，用户看不见，指纹是真浏览器（推荐）
       headless=offscreen=False  可见有头（登录/过验证用）
+    浏览器：Chrome 优先，本机没装则自动用 Edge（可被 data/browser_pref.json 指定）
     注意：无头必须用 DrissionPage 官方 co.headless()，raw 参数 --headless=new 会导致 CDP 连接 404"""
     from DrissionPage import ChromiumPage, ChromiumOptions
     mode = "headless" if headless else ("offscreen" if offscreen else "headed")
-    profile = profile or PROFILE_DIR
+    name, exe = pick_browser()
+    if not exe:
+        raise RuntimeError("本机既没装 Chrome 也没装 Edge，无法启动浏览器。"
+                           "装任一即可（命令里不用改，代码会自动选）。")
+    profile = profile_for_browser(profile or PROFILE_DIR, name)
     browser = _browsers.setdefault(slot, {"page": None, "headless": None})
     page = browser["page"]
     if page is not None and _page_alive(page):
-        if browser["headless"] == mode:
+        if browser["headless"] == mode and browser.get("name") == name:
             return page
         try:
             page.quit()
         except Exception:
             pass
         browser["page"] = None
-    exe = next((p for p in CHROME_CANDIDATES if os.path.exists(p)), None)
     os.makedirs(profile, exist_ok=True)
     last_err = None
     for attempt in range(2):
         if attempt:
-            cleanup_stale_browsers(match=os.path.join(profile, ""))
+            cleanup_stale_browsers(match=os.path.join(profile, ""), exe=exe)
         co = ChromiumOptions()
-        if exe:
-            co.set_browser_path(exe)
+        co.set_browser_path(exe)
         co.set_local_port(_get_free_port())
         co.set_argument(f"--user-data-dir={profile}")
         co.set_argument("--disable-blink-features=AutomationControlled")
@@ -152,13 +317,15 @@ def ensure_browser(headless=False, offscreen=False, profile=None, slot="boss"):
         co.set_argument("--window-size=1280,900")
         co.set_argument("--lang=zh-CN")          # 语言指纹与中文环境一致
         co.set_argument("--accept-lang=zh-CN,zh")
+        if name == "edge":
+            # Edge 特有：别让它自动拿微软账号登进 profile，也关掉首次运行向导
+            co.set_argument("--no-service-autorun")
+            co.set_argument("--disable-features=msImplicitSignin,msEdgeWelcomePage")
         if mode == "headless":
             co.headless()  # 官方无头开关
             # 无头模式 UA 默认带 "HeadlessChrome" 特征，BOSS 风控直接识别（code=37 环境异常）
-            # 用普通 Chrome UA 覆盖，配合下面的 JS 注入抹掉 webdriver 痕迹
-            co.set_user_agent(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36")
+            # 用真实品牌+版本的 UA 覆盖，配合下面的 JS 注入抹掉 webdriver 痕迹
+            co.set_user_agent(browser_ua(name, exe))
         elif mode == "offscreen":
             # 真实有头浏览器，只是窗口放到屏幕外 → 不打扰用户，同时没有无头指纹
             co.set_argument("--window-position=-3200,-3200")
@@ -171,10 +338,16 @@ def ensure_browser(headless=False, offscreen=False, profile=None, slot="boss"):
             except Exception:
                 pass
             browser["page"], browser["headless"] = page, mode
+            browser.update(name=name, exe=exe, profile=profile)
+            if mode != "headless":      # 真机 UA 才可信，顺手缓存给无头模式复用
+                try:
+                    remember_ua(name, page.run_js("return navigator.userAgent"), exe)
+                except Exception:
+                    pass
             return page
         except Exception as e:
             last_err = e
-    raise RuntimeError(f"浏览器启动失败：{last_err}")
+    raise RuntimeError(f"{BROWSER_LABELS.get(name, name)} 启动失败：{last_err}")
 
 
 def human_scroll(page, times=3):
@@ -225,10 +398,24 @@ def cookies_logged(page) -> bool:
 
 
 def set_login_state(ok, note=""):
+    """原子写状态文件（曾经的坑：open(w) 先截断再写，进程在中间被杀/异常
+    → 留下 0 字节空文件，get_login_state 解析失败显示「未登录」，用户以为掉登录。
+    2026-10-23 一天内踩了两次，改临时文件 + os.replace 保证原子性）"""
     import json as _json
+    import tempfile
     from datetime import datetime as _dt
-    _json.dump({"logged": bool(ok), "at": _dt.now().strftime("%Y-%m-%d %H:%M:%S"), "note": note},
-               open(STATE_FILE, "w", encoding="utf-8"))
+    payload = {"logged": bool(ok), "at": _dt.now().strftime("%Y-%m-%d %H:%M:%S"), "note": note}
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(STATE_FILE), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            _json.dump(payload, f, ensure_ascii=False)
+        os.replace(tmp, STATE_FILE)   # 同分区原子替换，不留半截文件
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except Exception:
+            pass
+        raise
 
 
 def _login_open():
@@ -245,8 +432,11 @@ def get_login_state():
     import json as _json
     try:
         st = _json.load(open(STATE_FILE, encoding="utf-8"))
+        if not isinstance(st, dict):
+            raise ValueError("not a dict")
     except Exception:
-        st = {"logged": False, "at": "", "note": ""}
+        # 状态文件损坏/为空（曾经的坑：非原子写被杀断）→ 不假装登录，明确指引
+        st = {"logged": False, "at": "", "note": "状态文件损坏，点「修复」刷新登录态", "stale": True}
     # 交叉校验：状态文件说已登录，但 Cookie 里没有 wt2/bsti → 实际是游客态，
     # 这里必须纠正，否则界面显示「已登录」而获取立刻报未登录（用户会以为坏了）
     if st.get("logged") and not cookies_have_login():
@@ -258,8 +448,35 @@ def get_login_state():
 
 
 def save_cookies(page):
+    """保存 Cookie：**合并写**，不清除已有的登录凭据。
+
+    曾经的坑（用户反馈「登录老掉」的根因）：这里是全量覆盖写，
+    而 repair_flow 在「未登录」分支也会调它 → 游客 cookie 把已保存的 wt2 擦掉，
+    表现为登录莫名其妙丢失。合并语义：新 cookie 按 (name, domain) 覆盖同名项、
+    追加新项；旧文件里的 wt2/bsti 在新列表没有同名项时**自动保留**（dict 合并天性）。
+    BOSS 主动踢会话会删/换 wt2，那时新列表带同名项会正常覆盖，不会留死值。
+    """
     import json as _json
-    _json.dump(_cookie_list(page), open(COOKIE_FILE, "w", encoding="utf-8"))
+    try:
+        new = _cookie_list(page)
+    except Exception:
+        return
+    old = []
+    try:
+        with open(COOKIE_FILE, encoding="utf-8") as f:
+            old = _json.load(f) or []
+    except Exception:
+        old = []
+
+    def _key(c):
+        name = c.get("name") if isinstance(c, dict) else getattr(c, "name", None)
+        dom = c.get("domain") if isinstance(c, dict) else getattr(c, "domain", "")
+        return (str(name), str(dom))
+
+    merged = {_key(c): c for c in old}   # 旧的先入（含 wt2/bsti）
+    for c in new:                        # 新的覆盖同名项、追加新项
+        merged[_key(c)] = c
+    _json.dump(list(merged.values()), open(COOKIE_FILE, "w", encoding="utf-8"))
 
 
 LOGIN_COOKIES = ("wt2", "bsti")
@@ -283,19 +500,58 @@ def cookies_have_login():
 
 
 def inject_cookies(page):
-    """先落地域名再写 Cookie，写完重新导航一次：
-    让 BOSS 自己的 JS 在带 Cookie 的会话里重新生成 __zp_stoken__ 等风控令牌，
-    否则沿用旧令牌容易被判定 code=36/37"""
+    """恢复登录态，三级阶梯（**不再用文件值粗暴覆盖 profile**）。
+
+    为什么会「每次都要重新登录」（2026-10-26 排查结论）：
+      旧逻辑无条件把文件里的 wt2 写进浏览器。文件里的 wt2 往往是上一次登录的旧值，
+      而浏览器 profile 里可能已经被 BOSS 的 JS 刷新成新的 —— 一注入就把新鲜的冲掉，
+      于是下次请求被判未登录，用户体感就是「怎么又要登」。
+      再加上 wt2 本身会过期（实测约 20 小时），旧值每次都被重新写回，等于永远修不好。
+
+    现在的阶梯：
+      1) profile 里已有登录凭据 → **一律不动**，只用文件补它没有的 cookie
+      2) profile 里没有 → 用文件里的注入
+      3) 注完还是没登录 → 说明文件里那份也过期了，如实返回 False（不装成功）
+    返回 True 表示浏览器当前拿到了登录凭据。
+    """
     import json as _json
     if not os.path.exists(COOKIE_FILE):
-        return False
+        return cookies_logged(page)
+    try:
+        saved = _json.load(open(COOKIE_FILE, encoding="utf-8")) or []
+    except Exception:
+        return cookies_logged(page)
+
+    def _names(pg):
+        out = set()
+        try:
+            for c in _cookie_list(pg):
+                nm = c.get("name") if isinstance(c, dict) else getattr(c, "name", None)
+                if nm:
+                    out.add(str(nm))
+        except Exception:
+            pass
+        return out
+
     try:
         page.get("https://www.zhipin.com/web/geek/jobs")
         time.sleep(1.2)
-        page.set.cookies(_json.load(open(COOKIE_FILE, encoding="utf-8")))
-        page.get("https://www.zhipin.com/web/geek/jobs")  # 带 Cookie 重新加载，刷新令牌
-        time.sleep(1.2)
-        return True
+        have = _names(page)
+        # 只在「profile 缺登录凭据」时才注入登录 cookie；其余 cookie 只补缺
+        lack_login = not any(n in have for n in LOGIN_COOKIES)
+        to_set = []
+        for c in saved:
+            nm = str(c.get("name") if isinstance(c, dict) else getattr(c, "name", "") or "")
+            if nm in LOGIN_COOKIES:
+                if lack_login:
+                    to_set.append(c)
+            elif nm not in have:
+                to_set.append(c)
+        if to_set:
+            page.set.cookies(to_set)
+            page.get("https://www.zhipin.com/web/geek/jobs")  # 带 Cookie 重新加载，刷新令牌
+            time.sleep(1.2)
+        return cookies_logged(page)
     except Exception:
         return False
 
@@ -303,6 +559,8 @@ def inject_cookies(page):
 def _close_browser(slot="boss"):
     browser = _browsers.get(slot, _browser)
     p = browser["page"]
+    prof = browser.get("profile") or PROFILE_DIR
+    exe = browser.get("exe")
     browser["page"] = browser["headless"] = None
     if p:
         try:
@@ -310,7 +568,16 @@ def _close_browser(slot="boss"):
             return
         except Exception:
             pass
-    cleanup_stale_browsers(match=os.path.join(PROFILE_DIR, ""))
+    cleanup_stale_browsers(match=os.path.join(prof, ""), exe=exe)
+
+
+def close_all():
+    """关掉所有 slot 的浏览器（切换浏览器偏好时用）"""
+    for slot in list(_browsers.keys()):
+        try:
+            _close_browser(slot)
+        except Exception:
+            pass
 
 
 def login_flow():
@@ -401,8 +668,10 @@ def repair_flow(keyword="数据分析", city_code="101230200"):
                 _record_risk(code, msg)
                 result["msg"] = f"已登录但接口仍被拦（code={code} {msg}），请在窗口里完成验证"
             else:
-                # 关键：接口放行 ≠ 已登录。游客态也能搜，但没有 wt2，获取轮会被拒
-                save_cookies(page)             # 反爬 cookie 先存，登录后覆盖
+                # 关键：接口放行 ≠ 已登录。游客态也能搜，但没有 wt2，获取轮会被拒。
+                # 这里**不保存 cookie**：曾经的坑——未登录时全量覆盖写会把已保存的
+                # wt2 擦掉（用户反馈「登录老掉」的根因）；游客反爬 cookie 没有保存价值，
+                # 注入时 BOSS 自己的 JS 会重新生成 __zp_stoken__ 等令牌。
                 result["msg"] = "还没登录：请在弹出的窗口里扫码登录 BOSS（接口可用但游客态不算登录）"
             time.sleep(15)
         else:
@@ -955,9 +1224,12 @@ def run_crawl(run_id, keywords, cities, pages, want_detail, headless=False, offs
 def _crawl_body(run_id, keywords, cities, pages, want_detail, headless, offscreen, logf,
                 covered, all_rows, run_ids, degree="", progress=None):
     page = ensure_browser(headless, offscreen)
-    inject_cookies(page)
+    logged_now = inject_cookies(page)
     mode_txt = "无头静默" if headless else ("离屏有头" if offscreen else "有头")
     logf(f"浏览器就绪（{mode_txt}模式，窗口不会打扰你）")
+    if not logged_now:
+        logf("⚠️ 登录凭据已失效（wt2 过期或缺失）：本轮很可能只拿到游客结果。"
+             "点顶部「BOSS」胶囊重新登录一次即可恢复（登录后会自动回写新的 Cookie）")
 
     # 进度：总任务 = 关键词 × 城市 × 页数（前端进度条用）
     tot = max(1, len(keywords) * len(cities) * max(1, int(pages or 1)))
@@ -1050,12 +1322,21 @@ def _crawl_body(run_id, keywords, cities, pages, want_detail, headless, offscree
 
     _flush(force=True)
 
+    # 抓完顺手把浏览器里最新鲜的 cookie 写回文件：
+    # wt2 会被 BOSS 的 JS 在会话中刷新，只有回写一次，文件里的备份才不会越放越旧
+    # （否则下次注入的永远是上一次登录时的那份，看着像「每次都要重新登录」）
+    try:
+        if cookies_logged(page):
+            save_cookies(page)
+    except Exception:
+        pass
+
     if not all_rows:
         logf("❌ 本轮未抓到任何数据" + (f"：{stopped}" if stopped else "（登录态失效或被风控）"))
         _p("未抓到数据")
         return 0, 0, 0
 
-    offline_cnt = db.mark_offline(covered, set(run_ids))
+    offline_cnt = db.mark_offline(covered, set(run_ids), source="boss", log=logf)
     with_sal = sum(1 for r in all_rows if r["salary"])
     logf(f"✅ 入库完成：共 {len(all_rows)} 条 ｜ 新增 {state['new']} ｜ 标记下线 {offline_cnt} ｜ "
          f"薪资有值 {with_sal}/{len(all_rows)}")

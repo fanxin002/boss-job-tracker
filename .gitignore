@@ -1,7 +1,10 @@
 # --- 隐私/运行时数据（绝不上传） ---
 data/
+bin/
 *.db
 *.log
+tools/
+tunnel.log
 .browsers.txt
 .pip.log
 .pipcheck.txt
@@ -39,3 +42,15 @@ Thumbs.db
 # git 操作临时输出
 _gitstage.txt
 _noproxy-test.txt
+
+# 后台运行的日志（serve.py 写这里）
+logs/
+_bat*.txt
+
+
+# --- 打包产物（PyInstaller）---
+build/
+dist/
+*.spec
+dist_single/
+*.zip
