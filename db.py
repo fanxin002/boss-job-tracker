@@ -483,7 +483,11 @@ def _build_where(filters):
     if filters.get("keyword"):
         where.append("keyword=?")
         params.append(filters["keyword"])
-    if filters.get("city_code"):
+    if filters.get("city"):
+        # 按名称筛选，一次覆盖两个平台（各自 code 不同）
+        where.append("city_name=?")
+        params.append(filters["city"])
+    elif filters.get("city_code"):
         where.append("city_code=?")
         params.append(filters["city_code"])
     if filters.get("status"):
@@ -584,8 +588,13 @@ def distinct_filters():
     c = conn()
     kws = [r["keyword"] for r in c.execute(
         "SELECT DISTINCT keyword FROM jobs WHERE keyword IS NOT NULL ORDER BY keyword")]
+    # 按城市名去重：BOSS 和猎聘同一城市用不同的 city_code
+    # （南京 101190100 / 060020，厦门 101230200 / 090040），
+    # 按 code 分组会让下拉出现两个同名项，且选一个只能看到单平台的岗位。
     cities = c.execute(
-        "SELECT DISTINCT city_name, city_code FROM jobs WHERE city_code IS NOT NULL ORDER BY city_name").fetchall()
+        "SELECT city_name, MIN(city_code) AS city_code FROM jobs "
+        "WHERE city_name IS NOT NULL AND city_name<>'' "
+        "GROUP BY city_name ORDER BY city_name").fetchall()
     degrees = [r["degree"] for r in c.execute(
         "SELECT DISTINCT degree FROM jobs WHERE degree NOT IN ('','不限') AND degree IS NOT NULL ORDER BY degree")]
     exps = [r["experience"] for r in c.execute(

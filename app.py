@@ -512,7 +512,7 @@ def _pid_running(pid):
     try:
         out = subprocess.run(["tasklist", "/FI", "PID eq %s" % pid],
                              capture_output=True, text=True, errors="ignore",
-                             timeout=8).stdout
+                             timeout=8, creationflags=_rp.CREATE_NO_WINDOW).stdout
         return str(pid) in out
     except Exception:
         return False
@@ -726,7 +726,8 @@ def api_tunnel_stop():
         return {"ok": False, "msg": "没记录到隧道进程；如果它还开着，去那个窗口按 Ctrl+C"}
     ok = False
     try:
-        r = subprocess.run(["taskkill", "/F", "/PID", pid], capture_output=True, timeout=15)
+        r = subprocess.run(["taskkill", "/F", "/PID", pid], capture_output=True, timeout=15,
+                           creationflags=_rp.CREATE_NO_WINDOW)
         ok = r.returncode == 0
     except Exception:
         ok = False
@@ -1283,14 +1284,14 @@ def api_details_cancel():
 
 
 @app.get("/api/jobs")
-def api_jobs(keyword: str = "", city_code: str = "", status: str = "",
+def api_jobs(keyword: str = "", city: str = "", city_code: str = "", status: str = "",
              is_new: int = 0, applied: str = "", degree: str = "", experience: str = "",
              scale: str = "", industry: str = "", salary_min: str = "", salary_max: str = "",
              no_salary: str = "", has_detail: str = "", starred: str = "", replied: str = "",
              dedupe: str = "", q: str = "", sort: str = "salary_desc", page: int = 1, size: int = 50,
              overdue: str = "", stage: str = "", source: str = ""):
     total, rows = db.query_jobs({
-        "keyword": keyword, "city_code": city_code, "status": status,
+        "keyword": keyword, "city": city, "city_code": city_code, "status": status,
         "is_new": is_new, "applied": applied, "degree": degree, "experience": experience,
         "scale": scale, "industry": industry, "salary_min": salary_min, "salary_max": salary_max,
         "no_salary": no_salary, "has_detail": has_detail, "starred": starred, "replied": replied,

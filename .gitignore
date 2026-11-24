@@ -54,3 +54,5 @@ dist/
 *.spec
 dist_single/
 *.zip
+# build_exe.py 重新打包时把旧 dist 改名挪到这里（每份约 100MB）
+_dist_prev*/

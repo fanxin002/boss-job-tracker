@@ -181,7 +181,8 @@ def cmd_stop():
     pid = None
     try:
         out = subprocess.run(["netstat", "-ano", "-p", "TCP"], capture_output=True,
-                             text=True, errors="ignore", timeout=15).stdout
+                             text=True, errors="ignore", timeout=15,
+                             creationflags=CREATE_NO_WINDOW).stdout
         for line in out.splitlines():
             parts = line.split()
             if len(parts) >= 5 and parts[0].upper() == "TCP" and parts[3].upper() == "LISTENING":
@@ -194,7 +195,8 @@ def cmd_stop():
         _say("没找到监听 %d 的进程" % PORT)
         return 1
     try:
-        subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True, timeout=20)
+        subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True, timeout=20,
+                       creationflags=CREATE_NO_WINDOW)
     except Exception:
         pass
     for _ in range(20):

@@ -19,6 +19,11 @@ def resource_path(*parts):
     return os.path.join(base, *parts)
 
 
+# --windowed 打包后自身没有控制台，任何 console 子进程（tasklist/taskkill/powershell/netstat）
+# 都会各自弹一个黑窗一闪而过。所有子进程一律带上这个标志。
+CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+
+
 # ---------------------------------------------------------------- 静态页面
 # 坑（2026-11-09 踩过）：单文件版把 static/ 放在 %TEMP%\_MEIxxxxx 里读。
 # Windows 存储感知/磁盘清理会定期清 Temp，被进程锁住的 .pyd/.dll 删不掉，

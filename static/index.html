@@ -2150,7 +2150,7 @@ function gotoRepliedInList(){
   switchView('jobs');
   applyFilters();
 }
-const FF=[['fKeyword','keyword','关键词'],['fCity','city_code','城市'],['fStatus','status','招聘状态'],
+const FF=[['fKeyword','keyword','关键词'],['fCity','city','城市'],['fStatus','status','招聘状态'],
   ['fApplied','applied','投递状态'],['fDetail','has_detail','描述'],['fSort','sort','排序'],
   ['fSalMin','salary_min','月薪下限'],['fSalMax','salary_max','月薪上限'],['fNoSal','no_salary','薪资'],
   ['fDegree','degree','学历'],['fExp','experience','经验'],['fScale','scale','规模'],
@@ -2196,7 +2196,7 @@ function renderChips(){
     const v=o[k];
     if(!v||(k==='sort'&&v===DEF_SORT)||(k==='is_new'&&v==='0'))return;
     let disp=v;
-    if(k==='keyword'||k==='city_code'){const s=document.getElementById(id);disp=s.options[s.selectedIndex]?s.options[s.selectedIndex].text:v}
+    if(k==='keyword'||k==='city'){const s=document.getElementById(id);disp=s.options[s.selectedIndex]?s.options[s.selectedIndex].text:v}
     else if(FT[k])disp=FT[k][v]||v;
     chips.push({id,text:`${label}：${disp}`});
   });
@@ -2223,7 +2223,7 @@ async function refreshFilters(){
   const kw=document.getElementById('fKeyword');
   kw.innerHTML='<option value="">全部</option>'+(f.keywords||[]).map(k=>`<option ${kw.value===k?'selected':''}>${esc(k)}</option>`).join('');
   const ct=document.getElementById('fCity'),cur=ct.value;
-  ct.innerHTML='<option value="">全部</option>'+(f.cities||[]).map(c=>`<option value="${c.city_code}" ${cur===c.city_code?'selected':''}>${esc(c.city_name||'')}</option>`).join('');
+  ct.innerHTML='<option value="">全部</option>'+(f.cities||[]).map(c=>`<option value="${esc(c.city_name||'')}" ${cur===c.city_name?'selected':''}>${esc(c.city_name||'')}</option>`).join('');
   const fill=(id,arr)=>{const el=document.getElementById(id),v=el.value;
     el.innerHTML='<option value="">不限</option>'+arr.map(x=>`<option ${v===x?'selected':''}>${esc(x)}</option>`).join('')};
   fill('fDegree',f.degrees||[]);fill('fExp',f.experiences||[]);fill('fScale',f.scales||[]);

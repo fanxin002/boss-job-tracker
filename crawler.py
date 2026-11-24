@@ -14,6 +14,9 @@ import db
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROFILE_DIR = os.path.join(db.DATA_DIR, "chrome_profile")
 
+# --windowed 打包后没有控制台，powershell/taskkill 这类子进程会各弹一个黑窗。
+_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+
 # ---------- 浏览器选择：Chrome 优先，装不上就自动退到 Edge ----------
 # 两个都是 Chromium 内核，DrissionPage 同一套 CDP 接口，代码完全通用。
 # 差异只在三处：exe 路径、User-Agent 里的品牌段、user-data-dir 必须分家
@@ -223,11 +226,12 @@ def cleanup_stale_browsers(match=None, exe=None):
              "Where-Object { $_.CommandLine -like '*%s*' } | "
              "ForEach-Object { $_.ProcessId }") % (nf, frag)
         out = subprocess.run(["powershell", "-NoProfile", "-Command", q],
-                             capture_output=True, text=True, timeout=30).stdout
+                             capture_output=True, text=True, timeout=30,
+                             creationflags=_NO_WINDOW).stdout
         for pid in out.split():
             if pid.strip().isdigit():
                 subprocess.run(["taskkill", "/F", "/PID", pid.strip()],
-                               capture_output=True, timeout=10)
+                               capture_output=True, timeout=10, creationflags=_NO_WINDOW)
         if out.strip():
             time.sleep(2)
     except Exception:

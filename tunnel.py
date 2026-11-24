@@ -230,7 +230,8 @@ def stop_running():
     if not pid.isdigit():
         print("没有记录的隧道进程")
         return
-    subprocess.run(["taskkill", "/PID", pid.strip(), "/F"], capture_output=True, timeout=10)
+    subprocess.run(["taskkill", "/PID", pid.strip(), "/F"], capture_output=True, timeout=10,
+                   creationflags=NO_WINDOW)
     print(f"🛑 已停止隧道进程 {pid}")
     try:
         os.remove(PID_FILE)
