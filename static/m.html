@@ -279,7 +279,6 @@
   <div class="toprow2">
     <div class="seg" id="chips"></div>
     <button class="btn-sm" id="btnFilter">筛选</button>
-    <button class="btn-sm" id="btnTheme" onclick="toggleBtTheme('classic')" title="切到第一版外观">旧版</button>
   </div>
 </header>
 
@@ -891,12 +890,6 @@ document.addEventListener('visibilitychange',()=>{
     if(n>0){ const b=$('#tabBadge'); b.textContent=n>99?'99+':n; b.classList.add('show'); }
   }catch(e){}
 })();
-</script>
-<script>
-function toggleBtTheme(v){
-  document.cookie = 'bt_theme=' + encodeURIComponent(v) + ';path=/;max-age=31536000;samesite=Lax';
-  location.reload();
-}
 </script>
 </body>
 </html>
