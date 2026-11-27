@@ -582,6 +582,7 @@
       <a id="nav-config" onclick="switchView('config')">获取配置</a>
     </nav>
     <div class="nav-actions">
+      <button class="btn btn-sm" onclick="toggleBtTheme('classic')" title="切换到第一版（简洁）外观">第一版外观</button>
       <div class="platlogin" title="点平台名可直接登录该平台（登录态各自独立保存）">
         <span class="pchip" id="chipBoss" onclick="platformLogin('boss')">
           <span class="dot" id="dotLogin"></span><b>BOSS</b><span id="loginState">未登录</span>
@@ -3058,6 +3059,12 @@ function bindMapSeg(){
   const ap=await safe(async()=>(await fetch('/api/apply_status')).json())||{};
   if(ap.running){applyRunning=true;pollApply()}
 })();
+</script>
+<script>
+function toggleBtTheme(v){
+  document.cookie = 'bt_theme=' + encodeURIComponent(v) + ';path=/;max-age=31536000;samesite=Lax';
+  location.reload();
+}
 </script>
 </body>
 </html>

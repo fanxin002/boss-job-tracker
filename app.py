@@ -1732,19 +1732,26 @@ def _serve_html(name):
     return HTMLResponse(html, headers={"Cache-Control": "no-store, must-revalidate"})
 
 
+def _theme_page(theme, classic, modern):
+    """两套外观：默认第一版（简洁）；页面按钮写 bt_theme cookie 切新版。
+    文件缺失时回退到基础页，避免旧持久目录没同步到新文件就报 503。"""
+    want = modern if (theme or "classic").strip() == "new" else classic
+    return want if os.path.exists(os.path.join(_STATIC, want)) else modern
+
+
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request, desktop: int = 0):
     """手机 UA 自动进手机版；`/?desktop=1` 可强制电脑版（手机版页脚也有「切到电脑版」）"""
     ua = request.headers.get("user-agent", "") or ""
     if not desktop and _MOBILE_UA.search(ua):
         return RedirectResponse("/m", status_code=302)
-    return _serve_html("index.html")
+    return _serve_html(_theme_page(request.cookies.get("bt_theme"), "index_classic.html", "index.html"))
 
 
 @app.get("/m", response_class=HTMLResponse)
-def mobile_page():
+def mobile_page(request: Request):
     """手机版：卡片列表 + 底部导航 + 下拉刷新，专为小屏写的独立页面（不是桌面版缩窄）"""
-    return _serve_html("m.html")
+    return _serve_html(_theme_page(request.cookies.get("bt_theme"), "m_classic.html", "m.html"))
 
 
 @app.get("/api/map")
